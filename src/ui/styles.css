@@ -400,7 +400,13 @@ button:focus-visible,
 
 /* ---------- overlays ---------- */
 
+/*
+ * #hud is pointer-events:none so aiming drags reach the canvas underneath.
+ * Anything inside it that must be clickable has to opt back in explicitly —
+ * without this the result screen's buttons look fine and do nothing.
+ */
 .veil {
+  pointer-events: auto;
   position: absolute;
   inset: 0;
   display: flex;

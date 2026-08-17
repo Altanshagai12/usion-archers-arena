@@ -12,6 +12,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 
+import { fallbackModel } from './fallback';
+
 export type ModelKey =
   | 'archer_a'
   | 'archer_b'
@@ -115,10 +117,22 @@ export async function loadModel(key: ModelKey): Promise<THREE.Group> {
   return promise;
 }
 
-/** A fresh, independently transformable copy. Geometry/materials stay shared. */
+/**
+ * A fresh, independently transformable copy. Geometry/materials stay shared.
+ *
+ * This NEVER rejects. A missing or corrupt .glb yields a procedural stand-in
+ * instead, because a match that cannot start is far worse than one that looks
+ * plainer than intended — and an unhandled rejection here used to abort arena
+ * construction silently, leaving the game frozen on "waiting".
+ */
 export async function instantiate(key: ModelKey): Promise<THREE.Group> {
-  const template = await loadModel(key);
-  return template.clone(true);
+  try {
+    const template = await loadModel(key);
+    return template.clone(true);
+  } catch (error) {
+    console.warn(`[archers-arena] model "${key}" unavailable, using fallback`, error);
+    return fallbackModel(key);
+  }
 }
 
 /**

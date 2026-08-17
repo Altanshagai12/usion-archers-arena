@@ -35,6 +35,7 @@ import type { ArcherStats, HitZone, ShotInput, Vec2 } from './sim';
 import { el } from './ui/dom';
 import { Hud } from './ui/hud';
 import { Menu } from './ui/menu';
+import type { UsionConfig } from './usion';
 
 const BOT_ID = '__bot__';
 const AIM_BROADCAST_MS = 70;
@@ -42,6 +43,8 @@ const AIM_BROADCAST_MS = 70;
 const PLAYBACK_SPEED = 1.35;
 const BOT_THINK_MS = 900;
 const MIN_SHOT_MS = 260;
+/** How long to wait for the host's INIT before assuming we are standalone. */
+const INIT_TIMEOUT_MS = 2500;
 
 type Phase = 'boot' | 'menu' | 'waiting' | 'playing' | 'over';
 
@@ -59,8 +62,11 @@ class Game {
   private rigs: [ArcherRig | null, ArcherRig | null] = [null, null];
 
   private readonly net: Net;
-  private readonly hud: Hud;
-  private readonly menu: Menu;
+  // Built in boot(), once the host has told us which language to render in.
+  private hud!: Hud;
+  private menu!: Menu;
+  private uiBuilt = false;
+  private hosted = false;
   private aimController: AimController | null = null;
 
   private profile: Profile = defaultProfile();
@@ -93,8 +99,15 @@ class Game {
       onPlayerJoined: (roster) => this.handleRoster(roster),
       onPlayerLeft: (roster) => this.handlePlayerLeft(roster),
       onRoomAssigned: (roomId) => void this.joinRoom(roomId),
-      onConnectionChange: (online) => this.hud.setReconnecting(!online),
+      onConnectionChange: (online) => this.hud?.setReconnecting(!online),
     });
+  }
+
+  // ------------------------------------------------------------------ boot
+
+  private buildUi(): void {
+    if (this.uiBuilt) return;
+    this.uiBuilt = true;
 
     this.hud = new Hud({
       onAgain: () => void this.restart(),
@@ -111,32 +124,59 @@ class Game {
     this.uiMount.append(this.menu.root, this.hud.root);
   }
 
-  // ------------------------------------------------------------------ boot
-
+  /**
+   * `window.Usion` exists even with no host around it — the SDK script defines
+   * it unconditionally — and `init(cb)` fires ONLY when the host posts INIT.
+   * So branching on `if (window.Usion)` waits forever outside the host, which
+   * is exactly how this shipped: no canvas, no menu, nothing.
+   *
+   * Race the host's INIT against a short timer and boot whichever wins.
+   */
   async boot(): Promise<void> {
     const sdk = window.Usion;
-    if (!sdk) {
-      // Standalone (`npm run dev`): no host, so offer the bot game only.
+    let settled = false;
+    let timer = 0;
+
+    const startHosted = (config: UsionConfig): void => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      this.hosted = true;
+      setLanguage(config.language);
+      this.buildUi();
+      this.net.registerHandlers(config);
+      void this.afterInit(config.roomId ?? null, config.playerIds ?? []);
+    };
+
+    const startStandalone = (): void => {
+      if (settled) return;
+      settled = true;
+      this.hosted = false;
       setLanguage(navigator.language);
-      await this.startRenderer();
-      this.profile = await loadProfile();
-      this.menu.setInviteAvailable(false);
-      this.showMenu();
+      this.buildUi();
+      void this.afterInit(null, []);
+    };
+
+    if (!sdk) {
+      startStandalone();
       return;
     }
 
-    sdk.init((config) => {
-      setLanguage(config.language);
-      this.net.registerHandlers(config);
-      void this.afterInit(config.roomId ?? null, config.playerIds ?? []);
-    });
+    timer = window.setTimeout(startStandalone, INIT_TIMEOUT_MS);
+    try {
+      sdk.init(startHosted);
+    } catch (error) {
+      console.warn('[archers-arena] Usion.init threw', error);
+      startStandalone();
+    }
   }
 
   private async afterInit(roomId: string | null, playerIds: string[]): Promise<void> {
     document.title = t('app.title');
-    this.menu.setInviteAvailable(this.net.embedded);
+    // Invites only work through the host; standalone has nobody to ask.
+    this.menu.setInviteAvailable(this.hosted);
 
-    const launchRoom = roomId ?? this.net.launchParams().roomId ?? null;
+    const launchRoom = this.hosted ? (roomId ?? this.net.launchParams().roomId ?? null) : null;
 
     // Join and boot the renderer concurrently — never gate the join on a frame.
     const joining = launchRoom ? this.joinRoom(launchRoom) : Promise.resolve();
@@ -156,20 +196,27 @@ class Game {
       this.showFatal(t('app.unsupported'), t('app.unsupportedHint'));
       return;
     }
-    const viewport = await waitForViewport(this.sceneMount);
-    const scene = createScene(this.sceneMount, viewport);
-    scene.root.add(this.arenaView.group);
-    this.scene = scene;
+    try {
+      const viewport = await waitForViewport(this.sceneMount);
+      const scene = createScene(this.sceneMount, viewport);
+      scene.root.add(this.arenaView.group);
+      this.scene = scene;
 
-    this.aimController = new AimController(scene.renderer.domElement, {
-      onStart: () => this.rigs[this.mySeat]?.nock(),
-      onMove: (aim) => this.handleAiming(aim),
-      onRelease: (aim) => void this.fire(aim),
-      onCancel: () => this.cancelAim(),
-    });
+      this.aimController = new AimController(scene.renderer.domElement, {
+        onStart: () => this.rigs[this.mySeat]?.nock(),
+        onMove: (aim) => this.handleAiming(aim),
+        onRelease: (aim) => void this.fire(aim),
+        onCancel: () => this.cancelAim(),
+      });
 
-    await preload(['archer_a', 'archer_b', 'bow', 'arrow']);
-    requestAnimationFrame(this.frame);
+      await preload(['archer_a', 'archer_b', 'bow', 'arrow']);
+      requestAnimationFrame(this.frame);
+    } catch (error) {
+      // Losing the renderer must not take the menu down with it — boot
+      // continues and the player at least sees why nothing is drawing.
+      console.error('[archers-arena] renderer failed to start', error);
+      this.showFatal(t('app.unsupported'), t('app.unsupportedHint'));
+    }
   }
 
   private showFatal(title: string, hint: string): void {
@@ -353,7 +400,14 @@ class Game {
     }
 
     if (this.builtArenaIndex !== this.state.arenaIndex) {
-      await this.buildArena();
+      // Scenery must never gate the match. Every caller invokes this as
+      // `void onStateChanged()`, so a throw here used to vanish into an
+      // unhandled rejection and the turn was never handed to anyone.
+      try {
+        await this.buildArena();
+      } catch (error) {
+        console.error('[archers-arena] arena build failed, playing anyway', error);
+      }
     }
 
     const arena = arenaByIndex(this.state.arenaIndex);
