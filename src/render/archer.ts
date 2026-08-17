@@ -35,6 +35,12 @@ export class ArcherRig {
   private readonly facing: 1 | -1;
   private readonly accent: number;
 
+  /**
+   * Only the character mesh flashes on a hit. Props like the quiver are cloned
+   * from a shared template, so their materials are shared between BOTH archers
+   * — tinting one would tint the other.
+   */
+  private character: THREE.Object3D | null = null;
   private nockedArrow: THREE.Object3D | null = null;
   private plate: THREE.Sprite | null = null;
   private plateTexture: THREE.CanvasTexture | null = null;
@@ -43,6 +49,8 @@ export class ArcherRig {
   private drawAmount = 0;
   private aimAngle = 0.5;
   private flashUntil = 0;
+  /** Lets the per-frame tint walk stop once the flash has been cleared. */
+  private wasFlashing = false;
   private recoil = 0;
   private name: string;
 
@@ -66,6 +74,9 @@ export class ArcherRig {
       instantiate('quiver').catch(() => null),
     ]);
 
+    // Each archer uses a different character model, so cloning still gives it
+    // its own material — safe to tint on a hit.
+    this.character = character;
     this.bodyPivot.add(character);
 
     if (quiver) {
@@ -190,7 +201,12 @@ export class ArcherRig {
     }
 
     const flashing = nowMs < this.flashUntil;
-    this.bodyPivot.traverse((child) => {
+    if (!this.character || (!flashing && !this.wasFlashing)) {
+      this.wasFlashing = flashing;
+      return;
+    }
+    this.wasFlashing = flashing;
+    this.character.traverse((child) => {
       const mesh = child as THREE.Mesh;
       if (!mesh.isMesh) return;
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];

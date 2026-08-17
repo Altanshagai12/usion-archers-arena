@@ -33,6 +33,7 @@ const en: Dict = {
   'menu.rating': 'Rating',
   'menu.cash': 'Gold',
   'menu.record': '{wins}W · {losses}L',
+  'menu.recordLabel': 'Won / lost',
 
   'upgrade.health': 'Max health',
   'upgrade.damage': 'Base damage',
@@ -99,6 +100,7 @@ const mn: Dict = {
   'menu.rating': 'Оноо',
   'menu.cash': 'Алт',
   'menu.record': '{wins}Я · {losses}Х',
+  'menu.recordLabel': 'Ялалт / хожигдол',
 
   'upgrade.health': 'Их эрүүл мэнд',
   'upgrade.damage': 'Суурь хохирол',

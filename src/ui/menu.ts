@@ -67,7 +67,7 @@ export class Menu {
     stats.append(
       this.stat(t('menu.rating'), this.ratingValue),
       this.stat(t('menu.cash'), this.cashValue),
-      this.stat(t('menu.record', { wins: '', losses: '' }).trim() || 'W/L', this.recordValue),
+      this.stat(t('menu.recordLabel'), this.recordValue),
     );
 
     this.inviteButton = button('primary', t('menu.invite'), callbacks.onInvite);
