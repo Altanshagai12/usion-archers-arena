@@ -484,9 +484,9 @@ class Game {
     }
 
     this.scene?.frameArena(
-      Math.min(arena.spawn[0].x, arena.spawn[1].x) - 3,
-      Math.max(arena.spawn[0].x, arena.spawn[1].x) + 3,
-      Math.max(arena.spawn[0].y, arena.spawn[1].y) + 4,
+      Math.min(arena.spawn[0].x, arena.spawn[1].x) - 1.2,
+      Math.max(arena.spawn[0].x, arena.spawn[1].x) + 1.2,
+      Math.max(arena.spawn[0].y, arena.spawn[1].y),
     );
     this.updateHealthPlates();
   }

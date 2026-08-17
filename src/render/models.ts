@@ -28,7 +28,17 @@ export type ModelKey =
   | 'banner'
   | 'crate';
 
-/** Target height in metres for each model, applied after normalisation. */
+/**
+ * Which axis a model's target size refers to.
+ *
+ * Default is height, which is right for anything that stands up. An arrow is
+ * generated lying flat, so its bounding box is barely tall at all — scaling
+ * that to 0.78 m of *height* blew it up to the size of a tree. Elongated props
+ * are fitted on their longest axis instead.
+ */
+const FIT_LONGEST_AXIS: ReadonlySet<ModelKey> = new Set<ModelKey>(['arrow']);
+
+/** Target size in metres for each model, applied after normalisation. */
 const TARGET_HEIGHT: Record<ModelKey, number> = {
   archer_a: 1.78,
   archer_b: 1.78,
@@ -52,7 +62,7 @@ const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const cache = new Map<ModelKey, THREE.Group>();
 const pending = new Map<ModelKey, Promise<THREE.Group>>();
 
-function normalise(root: THREE.Object3D, targetHeight: number): THREE.Group {
+function normalise(root: THREE.Object3D, targetHeight: number, fitLongest: boolean): THREE.Group {
   const wrapper = new THREE.Group();
 
   const box = new THREE.Box3().setFromObject(root);
@@ -61,8 +71,8 @@ function normalise(root: THREE.Object3D, targetHeight: number): THREE.Group {
   box.getSize(size);
   box.getCenter(centre);
 
-  const height = size.y || 1;
-  const scale = targetHeight / height;
+  const reference = fitLongest ? Math.max(size.x, size.y, size.z) : size.y;
+  const scale = targetHeight / (reference || 1);
 
   // Centre horizontally on the footprint, and put the lowest point on y = 0.
   root.position.set(-centre.x, -box.min.y, -centre.z);
@@ -103,7 +113,7 @@ export async function loadModel(key: ModelKey): Promise<THREE.Group> {
   const promise = loader
     .loadAsync(`${BASE_URL}${key}.glb`)
     .then((gltf) => {
-      const normalised = normalise(gltf.scene, TARGET_HEIGHT[key]);
+      const normalised = normalise(gltf.scene, TARGET_HEIGHT[key], FIT_LONGEST_AXIS.has(key));
       cache.set(key, normalised);
       pending.delete(key);
       return normalised;

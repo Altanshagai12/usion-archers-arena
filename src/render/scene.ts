@@ -166,18 +166,21 @@ export function createScene(mount: HTMLElement, viewport: Viewport): SceneHandle
    */
   const frameArena = (left: number, right: number, top: number): void => {
     const centreX = (left + right) / 2;
-    const span = Math.max(6, right - left) * 1.18;
-    const height = Math.max(6, top + 4);
+    // Keep the margin tight. The archers are 1.8 m in an ~20 m arena, so every
+    // extra metre of padding costs real readability on a phone; a full-power
+    // arc can leave the top of frame, which the arrow trail covers for.
+    const span = Math.max(6, right - left) * 1.04;
+    const height = Math.max(5, top + 3.2);
 
     const vFov = (camera.fov * Math.PI) / 180;
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
 
     const distanceForWidth = span / 2 / Math.tan(hFov / 2);
     const distanceForHeight = height / 2 / Math.tan(vFov / 2);
-    const distance = Math.max(distanceForWidth, distanceForHeight) + 6;
+    const distance = Math.max(distanceForWidth, distanceForHeight) + 1.5;
 
-    camera.position.set(centreX, Math.max(4.5, height * 0.52), distance);
-    camera.lookAt(centreX, Math.max(2.2, height * 0.34), 0);
+    camera.position.set(centreX, top * 0.5 + 2.4, distance);
+    camera.lookAt(centreX, top * 0.45 + 1.2, 0);
 
     sun.target.position.set(centreX, 0, 0);
     sun.position.set(centreX - 16, 28, 20);
