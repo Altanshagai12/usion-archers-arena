@@ -15,6 +15,15 @@ import { MAX_ANGLE, MIN_ANGLE, MIN_POWER } from './sim';
 /** Drag length, in CSS pixels, that corresponds to a fully drawn bow. */
 const FULL_DRAW_PX = 190;
 
+/**
+ * A release shorter than this is a tap, not a shot.
+ *
+ * Without it a stray tap — a mis-touch, a scroll that never moved, the host
+ * WebView handing us a click — fires at minimum power along whatever angle was
+ * left over, silently burning the player's turn.
+ */
+const MIN_DRAW_PX = 24;
+
 export interface AimEvent {
   angle: number;
   power: number;
@@ -104,8 +113,14 @@ export class AimController {
   private readonly handleUp = (event: PointerEvent): void => {
     if (this.pointerId !== event.pointerId) return;
     const aim = this.compute(event.clientX, event.clientY);
+    const drawn = Math.hypot(event.clientX - this.originX, event.clientY - this.originY);
     this.release(event.pointerId);
     event.preventDefault();
+
+    if (drawn < MIN_DRAW_PX) {
+      this.callbacks.onCancel();
+      return;
+    }
     this.callbacks.onRelease(aim);
   };
 
