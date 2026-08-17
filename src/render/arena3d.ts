@@ -28,6 +28,7 @@ export class ArenaView {
   private trailCount = 0;
 
   private arrow: THREE.Object3D | null = null;
+  private readonly aimTarget = new THREE.Vector3();
   private disposables: Array<{ dispose(): void }> = [];
 
   constructor() {
@@ -220,11 +221,13 @@ export class ArenaView {
     this.arrow.visible = true;
     this.arrow.position.set(point.x, point.y, point.z);
     if (previous) {
-      const dx = point.x - previous.x;
-      const dy = point.y - previous.y;
-      const dz = point.z - previous.z;
-      // The mesh is modelled lying along +x, so yaw first, then pitch.
-      this.arrow.rotation.set(0, Math.atan2(dz, dx) * -1, Math.atan2(dy, Math.hypot(dx, dz)));
+      // The mesh points along +z, so just aim it at where it is heading.
+      this.aimTarget.set(
+        point.x + (point.x - previous.x),
+        point.y + (point.y - previous.y),
+        point.z + (point.z - previous.z),
+      );
+      this.arrow.lookAt(this.aimTarget);
     }
   }
 

@@ -51,7 +51,7 @@ const FIT_LONGEST_AXIS: ReadonlySet<ModelKey> = new Set<ModelKey>(['arrow']);
 const TARGET_HEIGHT: Record<ModelKey, number> = {
   archer_a: 1.78,
   archer_b: 1.78,
-  bow: 1.15,
+  bow: 1.08,
   arrow: 0.78,
   quiver: 0.56,
   tree: 6.4,
@@ -85,13 +85,34 @@ function normalise(root: THREE.Object3D, targetHeight: number, fitLongest: boole
   const reference = fitLongest ? Math.max(size.x, size.y, size.z) : size.y;
   const scale = targetHeight / (reference || 1);
 
-  // Centre horizontally on the footprint, and put the lowest point on y = 0.
-  root.position.set(-centre.x, -box.min.y, -centre.z);
+  // Elongated models are generated lying along an arbitrary axis. Turn the long
+  // axis to +z so callers can treat "the arrow points +z" as a fact instead of
+  // guessing per model — guessing is what left the nocked arrow pointing
+  // sideways across the archer's chest.
+  let axisFix: THREE.Euler | null = null;
+  if (fitLongest) {
+    if (size.x >= size.y && size.x >= size.z) axisFix = new THREE.Euler(0, -Math.PI / 2, 0);
+    else if (size.y >= size.x && size.y >= size.z) axisFix = new THREE.Euler(Math.PI / 2, 0, 0);
+  }
+
+  // Standing props are centred on their footprint and dropped onto y = 0.
+  // Elongated ones are centred on all three axes instead, so they pivot about
+  // their middle rather than swinging around a point on the ground.
+  if (fitLongest) root.position.set(-centre.x, -centre.y, -centre.z);
+  else root.position.set(-centre.x, -box.min.y, -centre.z);
 
   const scaler = new THREE.Group();
   scaler.scale.setScalar(scale);
   scaler.add(root);
-  wrapper.add(scaler);
+
+  if (axisFix) {
+    const oriented = new THREE.Group();
+    oriented.rotation.copy(axisFix);
+    oriented.add(scaler);
+    wrapper.add(oriented);
+  } else {
+    wrapper.add(scaler);
+  }
 
   wrapper.traverse((child) => {
     const mesh = child as THREE.Mesh;

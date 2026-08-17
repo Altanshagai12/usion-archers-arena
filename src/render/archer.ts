@@ -16,7 +16,8 @@ import { instantiate } from './models';
 import type { ModelKey } from './models';
 
 /** The generated characters face +z, so seat 0 needs no correction. */
-const BOW_HAND = new THREE.Vector3(0.2, 1.42, 0.12);
+/** Bow hand: out to the side and forward at arm's length, not on the chest. */
+const BOW_HAND = new THREE.Vector3(0.26, 1.34, 0.44);
 
 export interface ArcherVisualOptions {
   model: Extract<ModelKey, 'archer_a' | 'archer_b'>;
@@ -71,8 +72,8 @@ export class ArcherRig {
     bow.rotation.set(0, Math.PI / 2, 0);
     this.aimPivot.add(bow);
 
-    // The arrow mesh lies along +x; point it down-range.
-    arrow.rotation.set(0, -Math.PI / 2, 0);
+    // models.ts canonicalises elongated meshes to point along +z, which is
+    // already down-range inside `facingGroup` — no correction needed.
     this.nockedArrow = arrow;
     this.aimPivot.add(arrow);
   }

@@ -58,19 +58,20 @@ function bow(): THREE.Group {
   return group;
 }
 
+/** Points along +z, matching the canonical orientation in models.ts. */
 function arrow(): THREE.Group {
   const group = new THREE.Group();
   const shaft = mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.72, 6), 0xc9a227, 0.7);
-  shaft.rotation.z = Math.PI / 2;
+  shaft.rotation.x = Math.PI / 2;
   group.add(shaft);
 
   const tip = mesh(new THREE.ConeGeometry(0.045, 0.13, 6), 0xd8dce2, 0.4);
-  tip.rotation.z = -Math.PI / 2;
-  tip.position.x = 0.42;
+  tip.rotation.x = Math.PI / 2;
+  tip.position.z = 0.42;
   group.add(tip);
 
-  const fletch = mesh(new THREE.BoxGeometry(0.12, 0.09, 0.01), 0xf87171, 0.9);
-  fletch.position.x = -0.3;
+  const fletch = mesh(new THREE.BoxGeometry(0.01, 0.09, 0.12), 0xf87171, 0.9);
+  fletch.position.z = -0.3;
   group.add(fletch);
   return group;
 }
@@ -170,7 +171,11 @@ export function fallbackModel(key: ModelKey): THREE.Group {
   const wrapper = new THREE.Group();
   wrapper.add(node);
 
-  const box = new THREE.Box3().setFromObject(wrapper);
-  node.position.y -= box.min.y;
+  // Standing props rest on y = 0; the arrow stays centred so it pivots about
+  // its middle, matching how models.ts normalises elongated meshes.
+  if (key !== 'arrow') {
+    const box = new THREE.Box3().setFromObject(wrapper);
+    node.position.y -= box.min.y;
+  }
   return wrapper;
 }
