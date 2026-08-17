@@ -11,10 +11,12 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 import { fallbackModel } from './fallback';
 
 export type ModelKey =
+  | 'archer_rigged'
   | 'archer_a'
   | 'archer_b'
   | 'bow'
@@ -47,8 +49,18 @@ const PROCEDURAL_ONLY: ReadonlySet<ModelKey> = new Set<ModelKey>(['fence', 'targ
  */
 const FIT_LONGEST_AXIS: ReadonlySet<ModelKey> = new Set<ModelKey>(['arrow']);
 
+/**
+ * Models held in a hand rather than stood on the ground.
+ *
+ * These are centred on their own middle so they pivot correctly and so a bow
+ * and the arrow nocked on it share an origin. Aligning the bow by its base
+ * instead put the arrow down at the lower limb tip, floating clear of the bow.
+ */
+const HELD_IN_HAND: ReadonlySet<ModelKey> = new Set<ModelKey>(['bow', 'arrow']);
+
 /** Target size in metres for each model, applied after normalisation. */
 const TARGET_HEIGHT: Record<ModelKey, number> = {
+  archer_rigged: 1.78,
   archer_a: 1.78,
   archer_b: 1.78,
   bow: 1.08,
@@ -73,7 +85,12 @@ const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const cache = new Map<ModelKey, THREE.Group>();
 const pending = new Map<ModelKey, Promise<THREE.Group>>();
 
-function normalise(root: THREE.Object3D, targetHeight: number, fitLongest: boolean): THREE.Group {
+function normalise(
+  root: THREE.Object3D,
+  targetHeight: number,
+  fitLongest: boolean,
+  centred: boolean,
+): THREE.Group {
   const wrapper = new THREE.Group();
 
   const box = new THREE.Box3().setFromObject(root);
@@ -96,9 +113,9 @@ function normalise(root: THREE.Object3D, targetHeight: number, fitLongest: boole
   }
 
   // Standing props are centred on their footprint and dropped onto y = 0.
-  // Elongated ones are centred on all three axes instead, so they pivot about
-  // their middle rather than swinging around a point on the ground.
-  if (fitLongest) root.position.set(-centre.x, -centre.y, -centre.z);
+  // Held items are centred on all three axes instead, so they pivot about
+  // their middle — and so a bow and its nocked arrow share an origin.
+  if (centred) root.position.set(-centre.x, -centre.y, -centre.z);
   else root.position.set(-centre.x, -box.min.y, -centre.z);
 
   const scaler = new THREE.Group();
@@ -119,6 +136,10 @@ function normalise(root: THREE.Object3D, targetHeight: number, fitLongest: boole
     if (!mesh.isMesh) return;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    // A posed skeleton moves vertices outside the bind-pose bounds, so leave
+    // culling to the renderer's own bounds rather than a stale bounding box.
+    if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) mesh.frustumCulled = false;
+
     const material = mesh.material as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[];
     const materials = Array.isArray(material) ? material : [material];
     for (const m of materials) {
@@ -135,6 +156,14 @@ function normalise(root: THREE.Object3D, targetHeight: number, fitLongest: boole
   return wrapper;
 }
 
+function hasSkeleton(root: THREE.Object3D): boolean {
+  let found = false;
+  root.traverse((child) => {
+    if ((child as THREE.SkinnedMesh).isSkinnedMesh) found = true;
+  });
+  return found;
+}
+
 export async function loadModel(key: ModelKey): Promise<THREE.Group> {
   const cached = cache.get(key);
   if (cached) return cached;
@@ -145,7 +174,12 @@ export async function loadModel(key: ModelKey): Promise<THREE.Group> {
   const promise = loader
     .loadAsync(`${BASE_URL}${key}.glb`)
     .then((gltf) => {
-      const normalised = normalise(gltf.scene, TARGET_HEIGHT[key], FIT_LONGEST_AXIS.has(key));
+      const normalised = normalise(
+        gltf.scene,
+        TARGET_HEIGHT[key],
+        FIT_LONGEST_AXIS.has(key),
+        HELD_IN_HAND.has(key),
+      );
       cache.set(key, normalised);
       pending.delete(key);
       return normalised;
@@ -171,6 +205,9 @@ export async function instantiate(key: ModelKey): Promise<THREE.Group> {
   if (PROCEDURAL_ONLY.has(key)) return fallbackModel(key);
   try {
     const template = await loadModel(key);
+    // Object3D.clone shares the Skeleton, so two archers would share one pose.
+    // SkeletonUtils rebuilds the bone hierarchy per copy.
+    if (hasSkeleton(template)) return skeletonClone(template) as THREE.Group;
     return template.clone(true);
   } catch (error) {
     console.warn(`[archers-arena] model "${key}" unavailable, using fallback`, error);

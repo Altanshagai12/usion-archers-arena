@@ -44,6 +44,12 @@ mkdirSync(tmpDir, { recursive: true });
 
 const io = new NodeIO();
 
+/** Skinned meshes must skip join/flatten — those rewrite node hierarchies. */
+async function isSkinned(path) {
+  const document = await io.read(path);
+  return document.getRoot().listSkins().length > 0;
+}
+
 async function shrinkTextures(inputPath, outputPath) {
   const document = await io.read(inputPath);
   let resized = 0;
@@ -88,23 +94,27 @@ for (const name of files) {
   const before = statSync(input).size;
 
   const resized = await shrinkTextures(input, staged);
+  const skinned = await isSkinned(staged);
 
-  execFileSync(
-    process.execPath,
-    [
-      cli,
-      'optimize',
-      staged,
-      output,
-      '--compress',
-      'meshopt',
-      '--texture-compress',
-      'false',
-      '--simplify',
-      'false',
-    ],
-    { stdio: ['ignore', 'ignore', 'inherit'] },
-  );
+  // A rigged character gets geometry compression only. `optimize` also runs
+  // join/flatten, which rewrite the node hierarchy the skeleton is bound to
+  // and would leave the archer a twisted mess.
+  const args = skinned
+    ? [cli, 'meshopt', staged, output]
+    : [
+        cli,
+        'optimize',
+        staged,
+        output,
+        '--compress',
+        'meshopt',
+        '--texture-compress',
+        'false',
+        '--simplify',
+        'false',
+      ];
+
+  execFileSync(process.execPath, args, { stdio: ['ignore', 'ignore', 'inherit'] });
 
   const after = statSync(output).size;
   totalBefore += before;

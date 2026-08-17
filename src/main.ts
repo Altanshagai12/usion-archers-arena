@@ -97,6 +97,7 @@ class Game {
   private aim: ShotInput = { pitch: 0.25, yaw: 0, power: 0.5 };
   private remoteAim: { seat: Seat; pitch: number; yaw: number } | null = null;
   private readonly cameraOrigin = new THREE.Vector3();
+  private lastFrameAt = 0;
 
   constructor() {
     this.net = new Net({
@@ -213,7 +214,7 @@ class Game {
         onCancel: () => this.cancelAim(),
       });
 
-      await preload(['archer_a', 'archer_b', 'bow', 'arrow', 'quiver']);
+      await preload(['archer_rigged', 'archer_a', 'archer_b', 'bow', 'arrow', 'quiver']);
       requestAnimationFrame(this.frame);
     } catch (error) {
       // Losing the renderer must not take the menu down with it.
@@ -485,7 +486,13 @@ class Game {
     const archers = archersFor(this.state);
     for (const seat of [0, 1] as Seat[]) {
       const options = {
-        model: (seat === 0 ? 'archer_a' : 'archer_b') as 'archer_a' | 'archer_b',
+        // Only the archer we stand behind is rigged and animated — the other
+        // is 30-75 m away, where a skeleton would cost frames for nothing.
+        model: (seat === this.mySeat
+          ? 'archer_rigged'
+          : seat === 0
+            ? 'archer_a'
+            : 'archer_b') as ModelKey,
         facing: facingOf(seat),
       };
       const rig = new ArcherRig(options);
@@ -690,8 +697,10 @@ class Game {
     const scene = this.scene;
     if (!scene) return;
 
-    this.rigs[0]?.update(now);
-    this.rigs[1]?.update(now);
+    const dt = this.lastFrameAt ? Math.min(0.1, (now - this.lastFrameAt) / 1000) : 1 / 60;
+    this.lastFrameAt = now;
+    this.rigs[0]?.update(now, dt);
+    this.rigs[1]?.update(now, dt);
 
     if (this.remoteAim) {
       this.rigs[this.remoteAim.seat]?.setAim(this.remoteAim.pitch, this.remoteAim.yaw);
