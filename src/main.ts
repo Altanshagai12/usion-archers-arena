@@ -185,13 +185,18 @@ class Game {
 
     // Join and boot the renderer concurrently — never gate the join on a frame.
     const joining = launchRoom ? this.joinRoom(launchRoom) : Promise.resolve();
-    const [loaded] = await Promise.all([loadProfile(), this.startRenderer(), joining]);
-    this.profile = loaded;
+    const rendering = this.startRenderer();
+
+    this.profile = await loadProfile();
     this.menu.setProfile(this.profile);
 
-    if (!launchRoom) {
-      this.showMenu();
-    } else {
+    // The menu needs no renderer, and waiting for one costs up to 4 s while a
+    // slow host reveals the iframe. Show it as soon as the profile is in.
+    if (!launchRoom) this.showMenu();
+
+    await Promise.all([rendering, joining]);
+
+    if (launchRoom) {
       this.handleRoster(playerIds.length ? playerIds : this.net.roster);
     }
   }
@@ -669,6 +674,9 @@ class Game {
   }
 
   private showMenu(): void {
+    // Never wipe a match that is already under way — boot finishes late on a
+    // slow host, and it must not stomp a game the player already started.
+    if (this.state.started && !this.state.over) return;
     this.phase = 'menu';
     this.builtArenaIndex = -1;
     this.resetMatchBookkeeping();
