@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"
+    />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Turn-based 3D archery duels. Aim, judge the wind, and out-shoot your friends." />
+    <title>Archers Arena</title>
+
+    <!--
+      Path B: this app is hosted by us, so we load the Usion SDK ourselves.
+      Apps deployed through the platform's own pipeline get it injected instead
+      and must NOT add this tag.
+    -->
+    <script src="https://usions.com/usion-sdk.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <div id="scene" aria-hidden="true"></div>
+      <main id="ui" aria-label="Archers Arena"></main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
