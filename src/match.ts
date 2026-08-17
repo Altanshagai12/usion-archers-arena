@@ -3,12 +3,12 @@
  *
  * Every client — and every client that rejoins mid-match — folds the same
  * actions in the same order and lands on the same state, so a shot only has to
- * cross the network as `{angle, power}`. Nothing in here may touch the DOM,
- * the network, the clock or randomness.
+ * cross the network as `{pitch, yaw, power}`. Nothing in here may touch the
+ * DOM, the network, the clock or randomness.
  */
 
 import { arenaByIndex } from './arenas';
-import { simulateShot } from './sim';
+import { archersOf, simulateShot } from './sim';
 import type { ArcherState, ArcherStats, HitZone, ShotInput } from './sim';
 
 export type Seat = 0 | 1;
@@ -74,21 +74,7 @@ function sanitiseStats(raw: any): ArcherStats {
 
 /** Live archer states derived from the match — positions come from the arena. */
 export function archersFor(state: MatchState): [ArcherState, ArcherState] {
-  const arena = arenaByIndex(state.arenaIndex);
-  return [
-    {
-      pos: arena.spawn[0],
-      facing: 1,
-      health: state.health[0],
-      stats: state.stats[0],
-    },
-    {
-      pos: arena.spawn[1],
-      facing: -1,
-      health: state.health[1],
-      stats: state.stats[1],
-    },
-  ];
+  return archersOf(arenaByIndex(state.arenaIndex), state.stats, state.health);
 }
 
 /**
@@ -131,7 +117,8 @@ export function applyAction(
     if (seat === null || seat !== next.turn) return next;
 
     const input: ShotInput = {
-      angle: Number(action.data?.angle) || 0,
+      pitch: Number(action.data?.pitch) || 0,
+      yaw: Number(action.data?.yaw) || 0,
       power: Number(action.data?.power) || 0,
     };
     const arena = arenaByIndex(next.arenaIndex);
@@ -156,14 +143,7 @@ export function applyAction(
       turn: seat === 0 ? 1 : 0,
       over: loser !== null,
       winner: loser === null ? null : loser === 0 ? 1 : 0,
-      lastShot: {
-        seat,
-        input,
-        zone,
-        damage,
-        blocked: result.blocked,
-        sequence: action.sequence,
-      },
+      lastShot: { seat, input, zone, damage, blocked: result.blocked, sequence: action.sequence },
     };
   }
 

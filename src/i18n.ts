@@ -50,6 +50,7 @@ const en: Dict = {
   'hud.wind': 'Wind',
   'hud.windCalm': 'Calm',
   'hud.you': 'You',
+  'hud.opponent': 'Rival',
   'hud.waiting': 'Waiting for opponent…',
   'hud.reconnecting': 'Reconnecting…',
 
@@ -117,6 +118,7 @@ const mn: Dict = {
   'hud.wind': 'Салхи',
   'hud.windCalm': 'Тайван',
   'hud.you': 'Та',
+  'hud.opponent': 'Өрсөлдөгч',
   'hud.waiting': 'Өрсөлдөгчийг хүлээж байна…',
   'hud.reconnecting': 'Дахин холбогдож байна…',
 

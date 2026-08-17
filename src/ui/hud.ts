@@ -1,11 +1,13 @@
 /**
- * The in-match overlay: whose turn it is, wind, the power bar while drawing,
- * hit feedback, the reconnect veil and the end-of-match result card.
+ * The in-match overlay: both health bars in the top corners, the elevation
+ * gauge down the left edge, whose turn it is, the draw meter, hit feedback,
+ * the reconnect veil and the end-of-match result card.
  *
  * It owns no game state — `main.ts` pushes everything in.
  */
 
 import { t, formatNumber } from '../i18n';
+import { pitchToDegrees } from '../sim';
 import { button, el, show } from './dom';
 import type { HitZone } from '../sim';
 
@@ -14,11 +16,36 @@ export interface ResultActions {
   onExit(): void;
 }
 
+const GAUGE_TICKS = 13;
+
+interface HealthPanel {
+  root: HTMLElement;
+  name: HTMLElement;
+  fill: HTMLElement;
+  value: HTMLElement;
+}
+
+function healthPanel(side: 'you' | 'foe'): HealthPanel {
+  const root = el('div', `health ${side}`);
+  const name = el('div', 'health-name');
+  const bar = el('div', 'health-bar');
+  const fill = el('div', 'health-fill');
+  const value = el('div', 'health-value');
+  bar.append(fill);
+  root.append(name, bar, value);
+  return { root, name, fill, value };
+}
+
 export class Hud {
   readonly root = el('div', 'hud');
 
-  private readonly arenaChip = el('div', 'chip');
-  private readonly windChip = el('div', 'chip');
+  private readonly you = healthPanel('you');
+  private readonly foe = healthPanel('foe');
+  private readonly gauge = el('div', 'gauge');
+  private readonly gaugeNeedle = el('div', 'gauge-needle');
+  private readonly gaugeValue = el('div', 'gauge-value');
+  private readonly windChip = el('div', 'chip wind');
+  private readonly arenaChip = el('div', 'chip arena');
   private readonly banner = el('div', 'turn-banner');
   private readonly hint = el('div', 'hint');
   private readonly power = el('div', 'power');
@@ -38,7 +65,11 @@ export class Hud {
     this.root.hidden = true;
 
     const top = el('div', 'hud-top');
-    top.append(this.arenaChip, this.windChip);
+    const chips = el('div', 'chips');
+    chips.append(this.arenaChip, this.windChip);
+    top.append(this.you.root, chips, this.foe.root);
+
+    this.buildGauge();
 
     const bottom = el('div', 'hud-bottom');
     this.power.hidden = true;
@@ -50,7 +81,6 @@ export class Hud {
     this.banner.setAttribute('aria-live', 'polite');
     this.toast.setAttribute('role', 'status');
     this.toast.setAttribute('aria-live', 'assertive');
-
     this.power.setAttribute('role', 'progressbar');
     this.power.setAttribute('aria-valuemin', '0');
     this.power.setAttribute('aria-valuemax', '100');
@@ -65,7 +95,18 @@ export class Hud {
     );
     this.resultVeil.append(this.resultTitle, this.resultReward, this.resultActions);
 
-    this.root.append(top, this.toast, bottom, this.connectionVeil, this.resultVeil);
+    this.root.append(top, this.gauge, this.toast, bottom, this.connectionVeil, this.resultVeil);
+    this.setElevation(0);
+  }
+
+  private buildGauge(): void {
+    const scale = el('div', 'gauge-scale');
+    for (let i = 0; i < GAUGE_TICKS; i += 1) {
+      const tick = el('div', i % 3 === 0 ? 'tick major' : 'tick');
+      scale.append(tick);
+    }
+    this.gauge.append(this.gaugeValue, scale, this.gaugeNeedle);
+    this.gauge.setAttribute('aria-hidden', 'true');
   }
 
   setVisible(visible: boolean): void {
@@ -80,9 +121,30 @@ export class Hud {
       this.windChip.textContent = `${t('hud.wind')} · ${t('hud.windCalm')}`;
       return;
     }
-    // Arrow points the way the wind pushes; the number is its strength.
-    const direction = wind > 0 ? '→' : '←';
-    this.windChip.textContent = `${t('hud.wind')} ${direction} ${strength.toFixed(1)}`;
+    // The arrow points the way the wind pushes; the number is its strength.
+    this.windChip.textContent = `${t('hud.wind')} ${wind > 0 ? '→' : '←'} ${strength.toFixed(1)}`;
+  }
+
+  setNames(you: string, foe: string): void {
+    this.you.name.textContent = you;
+    this.foe.name.textContent = foe;
+  }
+
+  setHealth(side: 'you' | 'foe', health: number, max: number): void {
+    const panel = side === 'you' ? this.you : this.foe;
+    const ratio = Math.max(0, Math.min(1, max > 0 ? health / max : 0));
+    panel.fill.style.width = `${ratio * 100}%`;
+    panel.fill.classList.toggle('low', ratio <= 0.25);
+    panel.value.textContent = formatNumber(Math.max(0, Math.round(health)));
+  }
+
+  /** Elevation in radians; the gauge reads it out in whole degrees. */
+  setElevation(pitch: number): void {
+    const degrees = pitchToDegrees(pitch);
+    this.gaugeValue.textContent = `${degrees}°`;
+    // -8°..45° maps to the bottom..top of the scale.
+    const fraction = Math.max(0, Math.min(1, (degrees + 8) / 53));
+    this.gaugeNeedle.style.bottom = `${fraction * 100}%`;
   }
 
   setTurn(mine: boolean, waiting: boolean): void {
@@ -129,7 +191,7 @@ export class Hud {
     window.clearTimeout(this.toastTimer);
     this.toastTimer = window.setTimeout(() => {
       this.toast.className = 'toast';
-    }, 1150);
+    }, 1250);
   }
 
   setReconnecting(active: boolean): void {

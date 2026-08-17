@@ -88,7 +88,63 @@ function tree(): THREE.Group {
   return group;
 }
 
+/** One post-and-two-rail section, the kind lining a shooting range. */
+function fence(): THREE.Group {
+  const group = new THREE.Group();
+  const wood = 0x8a6a44;
+
+  for (const x of [-2.2, 2.2]) {
+    const post = mesh(new THREE.BoxGeometry(0.12, 1.3, 0.12), wood);
+    post.position.set(x, 0.65, 0);
+    group.add(post);
+  }
+  for (const y of [0.55, 1.05]) {
+    const rail = mesh(new THREE.BoxGeometry(4.5, 0.09, 0.07), wood);
+    rail.position.set(0, y, 0);
+    group.add(rail);
+  }
+  return group;
+}
+
+/** Straw butt with painted rings, on a low stand. */
+function target(): THREE.Group {
+  const group = new THREE.Group();
+
+  const legs = mesh(new THREE.BoxGeometry(0.9, 0.12, 0.5), 0x6b4a2f);
+  legs.position.y = 0.06;
+  group.add(legs);
+
+  const butt = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.62, 0.62, 0.17, 22),
+    new THREE.MeshStandardMaterial({ color: 0xd6c187, roughness: 0.95 }),
+  );
+  butt.rotation.x = Math.PI / 2;
+  butt.position.y = 0.75;
+  butt.castShadow = true;
+  butt.receiveShadow = true;
+  group.add(butt);
+
+  // Rings sit a hair proud of the face so they never z-fight with it.
+  const rings: Array<[number, number]> = [
+    [0.62, 0xf4f4f4],
+    [0.42, 0xd8453c],
+    [0.2, 0xf4f4f4],
+  ];
+  rings.forEach(([radius, colour], index) => {
+    const face = new THREE.Mesh(
+      new THREE.CircleGeometry(radius, 24),
+      new THREE.MeshStandardMaterial({ color: colour, roughness: 0.9 }),
+    );
+    face.position.set(0, 0.75, 0.087 + index * 0.004);
+    group.add(face);
+  });
+
+  return group;
+}
+
 const SIMPLE: Partial<Record<ModelKey, () => THREE.Object3D>> = {
+  fence,
+  target,
   archer_a: () => archer(0xb03a3a),
   archer_b: () => archer(0x2f5fa8),
   bow,

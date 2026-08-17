@@ -26,7 +26,16 @@ export type ModelKey =
   | 'castle_tower'
   | 'ruin_column'
   | 'banner'
-  | 'crate';
+  | 'crate'
+  | 'fence'
+  | 'target';
+
+/**
+ * Drawn with plain geometry rather than shipped as a .glb. Repeated rail
+ * sections and round straw targets are crisper built than generated, and at
+ * this size nobody can tell — so we skip the download entirely.
+ */
+const PROCEDURAL_ONLY: ReadonlySet<ModelKey> = new Set<ModelKey>(['fence', 'target']);
 
 /**
  * Which axis a model's target size refers to.
@@ -52,6 +61,8 @@ const TARGET_HEIGHT: Record<ModelKey, number> = {
   ruin_column: 4.2,
   banner: 3.6,
   crate: 0.95,
+  fence: 1.3,
+  target: 1.5,
 };
 
 const BASE_URL = `${import.meta.env.BASE_URL}models/`;
@@ -136,6 +147,7 @@ export async function loadModel(key: ModelKey): Promise<THREE.Group> {
  * construction silently, leaving the game frozen on "waiting".
  */
 export async function instantiate(key: ModelKey): Promise<THREE.Group> {
+  if (PROCEDURAL_ONLY.has(key)) return fallbackModel(key);
   try {
     const template = await loadModel(key);
     return template.clone(true);
@@ -152,7 +164,9 @@ export async function instantiate(key: ModelKey): Promise<THREE.Group> {
  */
 export async function preload(keys: ModelKey[]): Promise<void> {
   await Promise.all(
-    keys.map((key) =>
+    keys
+      .filter((key) => !PROCEDURAL_ONLY.has(key))
+      .map((key) =>
       loadModel(key).catch((error) => {
         console.warn(`[archers-arena] model "${key}" failed to load`, error);
         return null;

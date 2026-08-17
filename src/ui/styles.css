@@ -302,8 +302,134 @@ button:focus-visible,
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+/* ---------- corner health bars ---------- */
+
+.health {
+  flex: 0 1 34%;
+  min-width: 108px;
+  max-width: 210px;
+}
+
+.health-name {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.health.foe .health-name,
+.health.foe .health-value {
+  text-align: right;
+}
+
+.health-bar {
+  margin-top: 4px;
+  height: 12px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  overflow: hidden;
+}
+
+.health-fill {
+  height: 100%;
+  width: 100%;
+  background: #56b7f0;
+  transition: width 220ms ease;
+}
+
+.health.foe .health-fill {
+  background: #e0574f;
+  /* Deplete the opponent's bar from the inside edge, mirroring the layout. */
+  margin-left: auto;
+}
+
+.health-fill.low {
+  background: #fbbf24;
+}
+
+.health-value {
+  margin-top: 3px;
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+.chips {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+/* ---------- elevation gauge ---------- */
+
+.gauge {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 46px;
+  height: min(46vh, 260px);
+  display: flex;
+  align-items: flex-start;
+}
+
+.gauge-scale {
+  position: absolute;
+  left: 6px;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.tick {
+  width: 9px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.tick.major {
+  width: 17px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.gauge-needle {
+  position: absolute;
+  left: 2px;
+  width: 26px;
+  height: 3px;
+  border-radius: 2px;
+  background: #f2e14a;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.9);
+  transition: bottom 90ms linear;
+}
+
+.gauge-value {
+  position: absolute;
+  left: 30px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
 }
 
 .chip {

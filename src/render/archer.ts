@@ -1,69 +1,54 @@
 /**
- * One archer: the generated character mesh plus a bow on a pivot.
+ * One archer: the generated character mesh plus a bow on an aim pivot.
  *
- * The original game's archers never move — they only swing the bow up and down
- * — so nothing here needs a skeleton. The character is a static mesh turned to
- * face the opponent, the bow hangs off a pivot at the bow hand, and drawing is
- * the nocked arrow sliding back with a small torso lean. That is exactly the
- * amount of animation the game reads as, and it keeps the assets cheap.
+ * The character never moves — it stands on its mound and swings the bow — so
+ * nothing here needs a skeleton. Everything hangs off `facingGroup`, inside
+ * which local +z always means "down-range", so pitch and yaw can be applied
+ * without caring which end of the range this archer is standing at.
+ *
+ * Health is shown in the HUD, not on floating plates, matching the game's
+ * corner bars.
  */
 
 import * as THREE from 'three';
 
 import { instantiate } from './models';
 import type { ModelKey } from './models';
-import type { ArcherStats } from '../sim';
 
-/** Generated characters face +Z; turn them to look along ±X at each other. */
-const FACING_YAW = Math.PI / 2;
-
-const BOW_PIVOT = new THREE.Vector3(0.26, 1.3, 0.16);
-const NAME_PLATE_HEIGHT = 2.25;
+/** The generated characters face +z, so seat 0 needs no correction. */
+const BOW_HAND = new THREE.Vector3(0.2, 1.42, 0.12);
 
 export interface ArcherVisualOptions {
   model: Extract<ModelKey, 'archer_a' | 'archer_b'>;
+  /** +1 shoots toward +z, -1 toward -z. */
   facing: 1 | -1;
-  name: string;
-  accent: number;
 }
 
 export class ArcherRig {
   readonly group = new THREE.Group();
 
-  private readonly bowPivot = new THREE.Group();
+  private readonly facingGroup = new THREE.Group();
+  private readonly aimPivot = new THREE.Group();
   private readonly bodyPivot = new THREE.Group();
-  private readonly facing: 1 | -1;
-  private readonly accent: number;
 
-  /**
-   * Only the character mesh flashes on a hit. Props like the quiver are cloned
-   * from a shared template, so their materials are shared between BOTH archers
-   * — tinting one would tint the other.
-   */
   private character: THREE.Object3D | null = null;
   private nockedArrow: THREE.Object3D | null = null;
-  private plate: THREE.Sprite | null = null;
-  private plateTexture: THREE.CanvasTexture | null = null;
-  private plateCanvas: HTMLCanvasElement | null = null;
 
   private drawAmount = 0;
-  private aimAngle = 0.5;
+  private pitch = 0.2;
+  private yaw = 0;
   private flashUntil = 0;
-  /** Lets the per-frame tint walk stop once the flash has been cleared. */
   private wasFlashing = false;
   private recoil = 0;
-  private name: string;
 
   constructor(options: ArcherVisualOptions) {
-    this.facing = options.facing;
-    this.accent = options.accent;
-    this.name = options.name;
+    this.facingGroup.rotation.y = options.facing === 1 ? 0 : Math.PI;
+    this.group.add(this.facingGroup);
 
-    this.bodyPivot.rotation.y = FACING_YAW * options.facing;
-    this.group.add(this.bodyPivot);
+    this.facingGroup.add(this.bodyPivot);
 
-    this.bowPivot.position.set(BOW_PIVOT.x * options.facing, BOW_PIVOT.y, BOW_PIVOT.z);
-    this.group.add(this.bowPivot);
+    this.aimPivot.position.copy(BOW_HAND);
+    this.facingGroup.add(this.aimPivot);
   }
 
   async load(options: ArcherVisualOptions): Promise<void> {
@@ -71,93 +56,31 @@ export class ArcherRig {
       instantiate(options.model),
       instantiate('bow'),
       instantiate('arrow'),
-      instantiate('quiver').catch(() => null),
+      instantiate('quiver'),
     ]);
 
-    // Each archer uses a different character model, so cloning still gives it
-    // its own material — safe to tint on a hit.
     this.character = character;
     this.bodyPivot.add(character);
 
-    if (quiver) {
-      quiver.position.set(-0.16 * this.facing, 0.95, -0.16);
-      quiver.rotation.set(0.24, FACING_YAW * this.facing, 0.3 * this.facing);
-      this.bodyPivot.add(quiver);
-    }
+    quiver.position.set(-0.2, 0.95, -0.14);
+    quiver.rotation.set(0.22, 0, 0.3);
+    this.bodyPivot.add(quiver);
 
-    // The bow model is normalised upright; lay it into the hand and mirror it
-    // for the archer on the right so both draw toward the centre.
-    bow.rotation.set(0, this.facing === 1 ? 0 : Math.PI, 0);
-    this.bowPivot.add(bow);
+    // The bow is modelled upright; turn it so the limbs stand across the line
+    // of fire and the string faces the archer.
+    bow.rotation.set(0, Math.PI / 2, 0);
+    this.aimPivot.add(bow);
 
-    arrow.rotation.set(0, 0, this.facing === 1 ? 0 : Math.PI);
+    // The arrow mesh lies along +x; point it down-range.
+    arrow.rotation.set(0, -Math.PI / 2, 0);
     this.nockedArrow = arrow;
-    this.bowPivot.add(arrow);
-
-    this.plate = this.createPlate();
-    this.plate.position.set(0, NAME_PLATE_HEIGHT, 0);
-    this.group.add(this.plate);
+    this.aimPivot.add(arrow);
   }
 
-  private createPlate(): THREE.Sprite {
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 64;
-    this.plateCanvas = canvas;
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    this.plateTexture = texture;
-    const sprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }),
-    );
-    sprite.scale.set(2.1, 0.52, 1);
-    sprite.renderOrder = 10;
-    return sprite;
-  }
-
-  /** Health bar + name, drawn into the sprite's canvas. */
-  setHealth(health: number, stats: ArcherStats): void {
-    const canvas = this.plateCanvas;
-    const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx || !this.plateTexture) return;
-
-    const ratio = Math.max(0, Math.min(1, health / stats.maxHealth));
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    ctx.font = '600 22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    // A dark halo keeps the name legible against both bright sky and dark stone.
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = 'rgba(0,0,0,0.72)';
-    ctx.strokeText(this.name, canvas.width / 2, 16);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(this.name, canvas.width / 2, 16);
-
-    const barX = 24;
-    const barY = 38;
-    const barW = canvas.width - 48;
-    const barH = 14;
-
-    ctx.fillStyle = 'rgba(0,0,0,0.62)';
-    ctx.fillRect(barX - 2, barY - 2, barW + 4, barH + 4);
-    ctx.fillStyle = 'rgba(255,255,255,0.18)';
-    ctx.fillRect(barX, barY, barW, barH);
-
-    const colour = ratio > 0.5 ? '#4ade80' : ratio > 0.22 ? '#fbbf24' : '#f87171';
-    ctx.fillStyle = colour;
-    ctx.fillRect(barX, barY, barW * ratio, barH);
-
-    this.plateTexture.needsUpdate = true;
-  }
-
-  setName(name: string): void {
-    this.name = name;
-  }
-
-  /** Aim angle in radians, already in the shooter's own frame. */
-  setAim(angle: number): void {
-    this.aimAngle = angle;
+  /** Elevation in radians — the number the gauge shows. */
+  setAim(pitch: number, yaw: number): void {
+    this.pitch = pitch;
+    this.yaw = yaw;
   }
 
   setDraw(amount: number): void {
@@ -175,29 +98,25 @@ export class ArcherRig {
   }
 
   flashHit(): void {
-    this.flashUntil = performance.now() + 320;
-  }
-
-  setActive(active: boolean): void {
-    this.group.scale.setScalar(active ? 1.0 : 0.985);
+    this.flashUntil = performance.now() + 340;
   }
 
   update(nowMs: number): void {
-    // The bow swings with the aim; a drawn bow also tips the torso back.
-    this.bowPivot.rotation.z = this.aimAngle * this.facing * -1;
-    this.bodyPivot.rotation.z = this.drawAmount * 0.06 * -this.facing;
+    // Local +z is down-range: a positive pitch tips the bow up, which is a
+    // negative rotation about x.
+    this.aimPivot.rotation.set(-this.pitch, this.yaw, 0);
+    // Drawing leans the archer back into the shot.
+    this.bodyPivot.rotation.x = -this.drawAmount * 0.05;
+    this.bodyPivot.rotation.y = this.yaw * 0.7;
 
     if (this.recoil > 0) {
-      this.recoil = Math.max(0, this.recoil - 0.08);
-      this.bowPivot.position.x =
-        BOW_PIVOT.x * this.facing - this.recoil * 0.09 * this.facing;
+      this.recoil = Math.max(0, this.recoil - 0.09);
+      this.aimPivot.position.z = BOW_HAND.z - this.recoil * 0.1;
     }
 
     if (this.nockedArrow) {
-      // Slide the nocked arrow back along the bow as the shot is drawn.
-      const pull = this.drawAmount * 0.34;
-      this.nockedArrow.position.set(-pull * this.facing, 0, 0.05);
-      this.nockedArrow.rotation.z = this.facing === 1 ? 0 : Math.PI;
+      // Slide the nocked arrow back along the shaft as the bow is drawn.
+      this.nockedArrow.position.set(0, 0, -this.drawAmount * 0.36);
     }
 
     const flashing = nowMs < this.flashUntil;
@@ -214,22 +133,12 @@ export class ArcherRig {
         const standard = material as THREE.MeshStandardMaterial;
         if (!standard || !standard.emissive) continue;
         standard.emissive.setHex(flashing ? 0xff3b30 : 0x000000);
-        standard.emissiveIntensity = flashing ? 0.55 : 0;
+        standard.emissiveIntensity = flashing ? 0.6 : 0;
       }
     });
   }
 
-  /** World position of the bow hand — where arrows are born. */
-  muzzleWorld(target: THREE.Vector3): THREE.Vector3 {
-    return this.bowPivot.getWorldPosition(target);
-  }
-
-  get accentColour(): number {
-    return this.accent;
-  }
-
   dispose(): void {
-    this.plateTexture?.dispose();
-    this.plate?.material.dispose();
+    this.group.removeFromParent();
   }
 }

@@ -1,31 +1,31 @@
 /**
- * Drag-to-aim.
+ * Aiming: hold, move up or down to set elevation, release to shoot.
  *
- * Press anywhere and pull back: the drag vector sets both the bow angle and the
- * draw strength, exactly like pulling a real bowstring, and releasing fires.
- * That is one gesture for the whole game — no separate angle slider, no power
- * button, and it works identically with a mouse or a thumb.
+ * Three quantities come out of one gesture, deliberately decoupled so they
+ * never fight each other:
  *
- * `facing` mirrors the gesture for the archer on the right, so "pull back"
- * always means "away from the opponent" for both players.
+ *   vertical drag   → pitch (the number on the elevation gauge)
+ *   horizontal drag → yaw (windage)
+ *   time held       → draw strength, which fills like a real bowstring
+ *
+ * Pitch resumes from the last shot rather than resetting, so walking your aim
+ * in — the whole skill of the game — is a small nudge rather than a re-aim.
  */
 
-import { MAX_ANGLE, MIN_ANGLE, MIN_POWER } from './sim';
+import { MAX_PITCH, MAX_YAW, MIN_PITCH, MIN_POWER, clampPitch, clampYaw } from './sim';
 
-/** Drag length, in CSS pixels, that corresponds to a fully drawn bow. */
-const FULL_DRAW_PX = 190;
-
-/**
- * A release shorter than this is a tap, not a shot.
- *
- * Without it a stray tap — a mis-touch, a scroll that never moved, the host
- * WebView handing us a click — fires at minimum power along whatever angle was
- * left over, silently burning the player's turn.
- */
-const MIN_DRAW_PX = 24;
+/** Vertical pixels that sweep the entire elevation range. */
+const PITCH_TRAVEL_PX = 340;
+/** Horizontal pixels that sweep the entire windage range. */
+const YAW_TRAVEL_PX = 300;
+/** Seconds of hold to go from the minimum draw to full. */
+const FULL_DRAW_SECONDS = 1.05;
+/** A release before this reads as a mis-tap, not a shot. */
+const MIN_HOLD_MS = 190;
 
 export interface AimEvent {
-  angle: number;
+  pitch: number;
+  yaw: number;
   power: number;
 }
 
@@ -40,9 +40,11 @@ export class AimController {
   private pointerId: number | null = null;
   private originX = 0;
   private originY = 0;
-  private facing: 1 | -1 = 1;
+  private startedAt = 0;
+  private pitchAtStart = 0.25;
   private enabled = false;
-  private current: AimEvent = { angle: 0.6, power: 0.6 };
+  private current: AimEvent = { pitch: 0.25, yaw: 0, power: MIN_POWER };
+  private frame = 0;
 
   constructor(
     private readonly surface: HTMLElement,
@@ -52,12 +54,11 @@ export class AimController {
     surface.addEventListener('pointermove', this.handleMove);
     surface.addEventListener('pointerup', this.handleUp);
     surface.addEventListener('pointercancel', this.handleCancel);
-    // Stop the host WebView from treating a drag as a scroll or a pull-to-refresh.
+    // Stop the host WebView treating a drag as a scroll or pull-to-refresh.
     surface.style.touchAction = 'none';
   }
 
-  setEnabled(enabled: boolean, facing: 1 | -1 = this.facing): void {
-    this.facing = facing;
+  setEnabled(enabled: boolean): void {
     if (this.enabled === enabled) return;
     this.enabled = enabled;
     if (!enabled) this.abort();
@@ -71,56 +72,74 @@ export class AimController {
     return this.current;
   }
 
-  private compute(x: number, y: number): AimEvent {
+  /** Start the next shot from a known elevation (e.g. after a rebuild). */
+  resetPitch(pitch: number): void {
+    this.current = { ...this.current, pitch: clampPitch(pitch) };
+  }
+
+  private compute(x: number, y: number, nowMs: number): AimEvent {
     const dx = x - this.originX;
     const dy = y - this.originY;
 
-    // Pull back to shoot forward; screen-down means aim up.
-    const forward = -dx * this.facing;
-    const up = dy;
+    // Pull down to raise the bow, the way you lift a sight onto a far target.
+    const pitch = clampPitch(
+      this.pitchAtStart + (dy / PITCH_TRAVEL_PX) * (MAX_PITCH - MIN_PITCH),
+    );
+    const yaw = clampYaw((dx / YAW_TRAVEL_PX) * MAX_YAW * 2);
 
-    const length = Math.hypot(dx, dy);
-    const power = Math.max(MIN_POWER, Math.min(1, length / FULL_DRAW_PX));
+    const held = (nowMs - this.startedAt) / 1000;
+    const power = Math.min(1, MIN_POWER + (held / FULL_DRAW_SECONDS) * (1 - MIN_POWER));
 
-    // Below a few pixels the direction is noise — hold the previous angle.
-    const angle =
-      length < 6
-        ? this.current.angle
-        : Math.max(MIN_ANGLE, Math.min(MAX_ANGLE, Math.atan2(up, forward)));
-
-    return { angle, power };
+    return { pitch, yaw, power };
   }
+
+  /** The draw keeps filling while the finger is still, so drive it per frame. */
+  private readonly tick = (): void => {
+    if (this.pointerId === null) return;
+    this.frame = requestAnimationFrame(this.tick);
+    this.current = this.compute(this.lastX, this.lastY, performance.now());
+    this.callbacks.onMove(this.current);
+  };
+
+  private lastX = 0;
+  private lastY = 0;
 
   private readonly handleDown = (event: PointerEvent): void => {
     if (!this.enabled || this.pointerId !== null) return;
     this.pointerId = event.pointerId;
     this.originX = event.clientX;
     this.originY = event.clientY;
-    this.current = { angle: this.current.angle, power: MIN_POWER };
+    this.lastX = event.clientX;
+    this.lastY = event.clientY;
+    this.startedAt = performance.now();
+    this.pitchAtStart = this.current.pitch;
     this.surface.setPointerCapture(event.pointerId);
     event.preventDefault();
     this.callbacks.onStart();
-    this.callbacks.onMove(this.current);
+    this.frame = requestAnimationFrame(this.tick);
   };
 
   private readonly handleMove = (event: PointerEvent): void => {
     if (this.pointerId !== event.pointerId) return;
-    this.current = this.compute(event.clientX, event.clientY);
+    this.lastX = event.clientX;
+    this.lastY = event.clientY;
     event.preventDefault();
-    this.callbacks.onMove(this.current);
   };
 
   private readonly handleUp = (event: PointerEvent): void => {
     if (this.pointerId !== event.pointerId) return;
-    const aim = this.compute(event.clientX, event.clientY);
-    const drawn = Math.hypot(event.clientX - this.originX, event.clientY - this.originY);
+    const now = performance.now();
+    const held = now - this.startedAt;
+    const aim = this.compute(event.clientX, event.clientY, now);
     this.release(event.pointerId);
     event.preventDefault();
 
-    if (drawn < MIN_DRAW_PX) {
+    if (held < MIN_HOLD_MS) {
+      // A stray tap must never burn a turn.
       this.callbacks.onCancel();
       return;
     }
+    this.current = aim;
     this.callbacks.onRelease(aim);
   };
 
@@ -132,6 +151,7 @@ export class AimController {
 
   private release(pointerId: number): void {
     this.pointerId = null;
+    cancelAnimationFrame(this.frame);
     try {
       this.surface.releasePointerCapture(pointerId);
     } catch {
@@ -146,6 +166,7 @@ export class AimController {
   }
 
   dispose(): void {
+    cancelAnimationFrame(this.frame);
     this.surface.removeEventListener('pointerdown', this.handleDown);
     this.surface.removeEventListener('pointermove', this.handleMove);
     this.surface.removeEventListener('pointerup', this.handleUp);

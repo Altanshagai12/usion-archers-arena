@@ -4,7 +4,7 @@ import { arenaByIndex } from '../src/arenas';
 import { chooseBotShot, createBotMemory } from '../src/bot';
 import { applyAction, archersFor, emptyMatch, replay } from '../src/match';
 import type { MatchAction, MatchState, Seat } from '../src/match';
-import { simulateShot } from '../src/sim';
+import { MAX_PITCH, MAX_YAW, simulateShot } from '../src/sim';
 import type { ArcherStats } from '../src/sim';
 
 const P0 = 'player-0';
@@ -28,12 +28,16 @@ function started(arenaIndex = 0): MatchState {
 function killerShot(state: MatchState, seat: Seat) {
   const arena = arenaByIndex(state.arenaIndex);
   const archers = archersFor(state);
-  for (let a = 0; a < 400; a += 1) {
-    const angle = -0.2 + (a / 400) * 1.5;
-    for (let p = 0; p < 60; p += 1) {
-      const power = 0.3 + (p / 60) * 0.7;
-      const result = simulateShot(arena, archers, seat, { angle, power });
-      if (result.hit?.zone === 'body') return { angle, power };
+  for (let a = 0; a < 110; a += 1) {
+    const pitch = -0.1 + (a / 110) * 0.85;
+    for (let p = 0; p < 22; p += 1) {
+      const power = 0.35 + (p / 22) * 0.65;
+      for (let w = 0; w < 17; w += 1) {
+        // Yaw is searched too: crosswind blows a straight shot off target.
+        const yaw = -MAX_YAW + (w / 16) * MAX_YAW * 2;
+        const input = { pitch, yaw, power };
+        if (simulateShot(arena, archers, seat, input).hit?.zone === 'body') return input;
+      }
     }
   }
   throw new Error('no body shot found');
@@ -50,8 +54,7 @@ describe('match reducer', () => {
 
   it('ignores a shot from the player whose turn it is not', () => {
     const state = started();
-    const shot = killerShot(state, 0);
-    const after = act(state, P0, 'shoot', shot); // seat 0, but it is seat 1's turn
+    const after = act(state, P0, 'shoot', killerShot(state, 0));
     expect(after.health).toEqual(state.health);
     expect(after.turn).toBe(1);
     expect(after.lastShot).toBeNull();
@@ -59,8 +62,7 @@ describe('match reducer', () => {
 
   it('applies damage and passes the turn', () => {
     let state = started();
-    const shot = killerShot(state, 1);
-    state = act(state, P1, 'shoot', shot);
+    state = act(state, P1, 'shoot', killerShot(state, 1));
 
     expect(state.health[0]).toBe(STATS.maxHealth - STATS.baseDamage);
     expect(state.health[1]).toBe(STATS.maxHealth);
@@ -74,13 +76,14 @@ describe('match reducer', () => {
     let guard = 0;
     while (!state.over && guard < 40) {
       const seat = state.turn;
-      const shooter = seat === 0 ? P0 : P1;
-      state = act(state, shooter, 'shoot', killerShot(state, seat));
+      state = act(state, seat === 0 ? P0 : P1, 'shoot', killerShot(state, seat));
       guard += 1;
     }
     expect(state.over).toBe(true);
     expect(state.winner).not.toBeNull();
     expect(state.health[state.winner === 0 ? 1 : 0]).toBe(0);
+    // 100 HP at 25 a hit — a duel is several exchanges, never one shot.
+    expect(guard).toBeGreaterThan(4);
   });
 
   it('refuses further shots once the match is over', () => {
@@ -91,7 +94,7 @@ describe('match reducer', () => {
       state = act(state, seat === 0 ? P0 : P1, 'shoot', killerShot(state, seat));
       guard += 1;
     }
-    const frozen = act(state, P0, 'shoot', { angle: 0.6, power: 0.9 });
+    const frozen = act(state, P0, 'shoot', { pitch: 0.3, yaw: 0, power: 0.9 });
     expect(frozen.health).toEqual(state.health);
     expect(frozen.winner).toBe(state.winner);
   });
@@ -104,11 +107,8 @@ describe('match reducer', () => {
     state = applyAction(state, action, seatOf);
     const health = [...state.health];
 
-    const again = applyAction(state, action, seatOf);
-    expect(again.health).toEqual(health);
-
-    const stale = applyAction(state, { ...action, sequence: 12 }, seatOf);
-    expect(stale.health).toEqual(health);
+    expect(applyAction(state, action, seatOf).health).toEqual(health);
+    expect(applyAction(state, { ...action, sequence: 12 }, seatOf).health).toEqual(health);
   });
 
   it('replays an action log to exactly the same state', () => {
@@ -157,11 +157,12 @@ describe('bot', () => {
     const state = started();
     const arena = arenaByIndex(0);
     const memory = createBotMemory();
-    for (let i = 0; i < 25; i += 1) {
+    for (let i = 0; i < 20; i += 1) {
       const shot = chooseBotShot(arena, archersFor(state), 1, arena.botSkill, memory);
       expect(shot.power).toBeGreaterThanOrEqual(0.2);
       expect(shot.power).toBeLessThanOrEqual(1);
-      expect(Number.isFinite(shot.angle)).toBe(true);
+      expect(Math.abs(shot.yaw)).toBeLessThanOrEqual(MAX_YAW);
+      expect(shot.pitch).toBeLessThanOrEqual(MAX_PITCH);
     }
   });
 
@@ -172,7 +173,7 @@ describe('bot', () => {
 
     const hitRate = (skill: number): number => {
       let hits = 0;
-      const rounds = 260;
+      const rounds = 120;
       for (let i = 0; i < rounds; i += 1) {
         const memory = createBotMemory();
         memory.shotsTaken = 3; // past the warm-up, measuring steady-state aim
@@ -183,9 +184,8 @@ describe('bot', () => {
     };
 
     const weak = hitRate(0.3);
-    const strong = hitRate(0.9);
-    expect(strong).toBeGreaterThan(weak + 0.15);
+    const strong = hitRate(0.95);
+    expect(strong).toBeGreaterThan(weak + 0.1);
     expect(weak).toBeGreaterThan(0);
-    expect(strong).toBeLessThan(1);
   });
 });

@@ -1,12 +1,18 @@
 /**
  * Entry point: boots the renderer, wires the SDK, and runs the match loop.
  *
+ * The view is over the local archer's shoulder, looking down-range, so the
+ * camera is rebuilt every frame from the current aim — which is what makes
+ * drawing the bow feel like leaning into the shot.
+ *
  * Ordering note — the scene waits for a non-zero viewport (embedded WebViews
  * reveal the iframe late), but the network never does. Gating `connect()` on a
  * rendered frame is a known way to make a game silently never join.
  */
 
 import './ui/styles.css';
+
+import * as THREE from 'three';
 
 import { arenaByIndex, highestUnlockedArena } from './arenas';
 import { chooseBotShot, createBotMemory, recordBotOutcome } from './bot';
@@ -30,8 +36,8 @@ import { preload } from './render/models';
 import type { ModelKey } from './render/models';
 import { createScene, isWebGLAvailable, waitForViewport } from './render/scene';
 import type { SceneHandles } from './render/scene';
-import { previewPath, simulateShot } from './sim';
-import type { ArcherStats, HitZone, ShotInput, Vec2 } from './sim';
+import { facingOf, previewPath, simulateShot } from './sim';
+import type { ArcherStats, HitZone, ShotInput, Vec3 } from './sim';
 import { el } from './ui/dom';
 import { Hud } from './ui/hud';
 import { Menu } from './ui/menu';
@@ -40,16 +46,16 @@ import type { UsionConfig } from './usion';
 const BOT_ID = '__bot__';
 const AIM_BROADCAST_MS = 70;
 /** Real flight times are slow to watch; nudge playback without losing weight. */
-const PLAYBACK_SPEED = 1.35;
+const PLAYBACK_SPEED = 1.25;
 const BOT_THINK_MS = 900;
-const MIN_SHOT_MS = 260;
+const MIN_SHOT_MS = 300;
 /** How long to wait for the host's INIT before assuming we are standalone. */
 const INIT_TIMEOUT_MS = 2500;
 
 type Phase = 'boot' | 'menu' | 'waiting' | 'playing' | 'over';
 
 interface Playback {
-  path: Vec2[];
+  path: Vec3[];
   startedAt: number;
 }
 
@@ -62,7 +68,6 @@ class Game {
   private rigs: [ArcherRig | null, ArcherRig | null] = [null, null];
 
   private readonly net: Net;
-  // Built in boot(), once the host has told us which language to render in.
   private hud!: Hud;
   private menu!: Menu;
   private uiBuilt = false;
@@ -89,7 +94,9 @@ class Game {
   private builtArenaIndex = -1;
 
   private playback: Playback | null = null;
-  private remoteAim: { seat: Seat; angle: number } | null = null;
+  private aim: ShotInput = { pitch: 0.25, yaw: 0, power: 0.5 };
+  private remoteAim: { seat: Seat; pitch: number; yaw: number } | null = null;
+  private readonly cameraOrigin = new THREE.Vector3();
 
   constructor() {
     this.net = new Net({
@@ -127,9 +134,7 @@ class Game {
   /**
    * `window.Usion` exists even with no host around it — the SDK script defines
    * it unconditionally — and `init(cb)` fires ONLY when the host posts INIT.
-   * So branching on `if (window.Usion)` waits forever outside the host, which
-   * is exactly how this shipped: no canvas, no menu, nothing.
-   *
+   * So branching on `if (window.Usion)` waits forever outside the host.
    * Race the host's INIT against a short timer and boot whichever wins.
    */
   async boot(): Promise<void> {
@@ -173,7 +178,6 @@ class Game {
 
   private async afterInit(roomId: string | null, playerIds: string[]): Promise<void> {
     document.title = t('app.title');
-    // Invites only work through the host; standalone has nobody to ask.
     this.menu.setInviteAvailable(this.hosted);
 
     const launchRoom = this.hosted ? (roomId ?? this.net.launchParams().roomId ?? null) : null;
@@ -209,11 +213,10 @@ class Game {
         onCancel: () => this.cancelAim(),
       });
 
-      await preload(['archer_a', 'archer_b', 'bow', 'arrow']);
+      await preload(['archer_a', 'archer_b', 'bow', 'arrow', 'quiver']);
       requestAnimationFrame(this.frame);
     } catch (error) {
-      // Losing the renderer must not take the menu down with it — boot
-      // continues and the player at least sees why nothing is drawing.
+      // Losing the renderer must not take the menu down with it.
       console.error('[archers-arena] renderer failed to start', error);
       this.showFatal(t('app.unsupported'), t('app.unsupportedHint'));
     }
@@ -291,7 +294,12 @@ class Game {
 
   // --------------------------------------------------------------- actions
 
-  private handleAction(message: { player_id: string; action_type: string; action_data: any; sequence?: number }): void {
+  private handleAction(message: {
+    player_id: string;
+    action_type: string;
+    action_data: any;
+    sequence?: number;
+  }): void {
     if (message.action_type === 'ready') {
       const stats = message.action_data?.stats;
       if (stats) this.readyStats.set(message.player_id, stats);
@@ -310,11 +318,19 @@ class Game {
     void this.onStateChanged();
   }
 
-  private handleRealtime(message: { player_id: string; action_type: string; action_data: any }): void {
+  private handleRealtime(message: {
+    player_id: string;
+    action_type: string;
+    action_data: any;
+  }): void {
     if (message.action_type !== 'aim') return;
     const seat = this.seatOf(message.player_id);
     if (seat === null || seat === this.mySeat) return;
-    this.remoteAim = { seat, angle: Number(message.action_data?.angle) || 0 };
+    this.remoteAim = {
+      seat,
+      pitch: Number(message.action_data?.pitch) || 0,
+      yaw: Number(message.action_data?.yaw) || 0,
+    };
   }
 
   private handleSync(data: any): void {
@@ -374,10 +390,13 @@ class Game {
     this.resultReported = false;
     this.playback = null;
     this.remoteAim = null;
+    this.aim = { pitch: 0.25, yaw: 0, power: 0.5 };
+    this.aimController?.resetPitch(0.25);
     this.arenaView.hideArrow();
-    this.arenaView.hideGuide();
+    this.arenaView.hideTracer();
     this.hud.hideResult();
     this.hud.setPower(null);
+    this.hud.setElevation(0.25);
   }
 
   private applyLocalAction(type: string, data: unknown, playerId: string): void {
@@ -401,8 +420,8 @@ class Game {
 
     if (this.builtArenaIndex !== this.state.arenaIndex) {
       // Scenery must never gate the match. Every caller invokes this as
-      // `void onStateChanged()`, so a throw here used to vanish into an
-      // unhandled rejection and the turn was never handed to anyone.
+      // `void onStateChanged()`, so a throw here would vanish into an
+      // unhandled rejection and the turn would never be handed to anyone.
       try {
         await this.buildArena();
       } catch (error) {
@@ -412,7 +431,7 @@ class Game {
 
     const arena = arenaByIndex(this.state.arenaIndex);
     this.hud.setArena(arena.nameKey, arena.wind);
-    this.updateHealthPlates();
+    this.refreshHealth();
 
     const shot = this.state.lastShot;
     if (shot && shot.sequence > this.animatedSequence) {
@@ -432,10 +451,8 @@ class Game {
 
     const mine = this.state.turn === this.mySeat;
     this.hud.setTurn(mine, false);
-    this.aimController?.setEnabled(mine, this.mySeat === 0 ? 1 : -1);
-    this.rigs[this.state.turn]?.nock();
-    this.rigs[0]?.setActive(this.state.turn === 0);
-    this.rigs[1]?.setActive(this.state.turn === 1);
+    this.aimController?.setEnabled(mine);
+    if (mine) this.rigs[this.mySeat]?.nock();
 
     window.clearTimeout(this.botTimer);
     if (this.vsBot && this.state.turn === 1) {
@@ -465,35 +482,28 @@ class Game {
     }
     this.rigs = [null, null];
 
-    const opponentName = this.vsBot ? 'Bot' : t('hud.opponentTurn');
-    const names: [string, string] =
-      this.mySeat === 0 ? [this.net.myName(), opponentName] : [opponentName, this.net.myName()];
-
+    const archers = archersFor(this.state);
     for (const seat of [0, 1] as Seat[]) {
       const options = {
         model: (seat === 0 ? 'archer_a' : 'archer_b') as 'archer_a' | 'archer_b',
-        facing: (seat === 0 ? 1 : -1) as 1 | -1,
-        name: names[seat],
-        accent: seat === 0 ? 0xf87171 : 0x60a5fa,
+        facing: facingOf(seat),
       };
       const rig = new ArcherRig(options);
       await rig.load(options);
-      rig.group.position.set(arena.spawn[seat].x, arena.spawn[seat].y, 0);
+      rig.group.position.set(archers[seat].pos.x, archers[seat].pos.y, archers[seat].pos.z);
       this.scene?.root.add(rig.group);
       this.rigs[seat] = rig;
     }
 
-    this.scene?.frameArena(
-      Math.min(arena.spawn[0].x, arena.spawn[1].x) - 1.2,
-      Math.max(arena.spawn[0].x, arena.spawn[1].x) + 1.2,
-      Math.max(arena.spawn[0].y, arena.spawn[1].y),
-    );
-    this.updateHealthPlates();
+    const opponentName = this.vsBot ? 'Bot' : t('hud.opponent');
+    this.hud.setNames(t('hud.you'), opponentName);
+    this.refreshHealth();
   }
 
-  private updateHealthPlates(): void {
-    this.rigs[0]?.setHealth(this.state.health[0], this.state.stats[0]);
-    this.rigs[1]?.setHealth(this.state.health[1], this.state.stats[1]);
+  private refreshHealth(): void {
+    const foe: Seat = this.mySeat === 0 ? 1 : 0;
+    this.hud.setHealth('you', this.state.health[this.mySeat], this.state.stats[this.mySeat].maxHealth);
+    this.hud.setHealth('foe', this.state.health[foe], this.state.stats[foe].maxHealth);
   }
 
   // -------------------------------------------------------------- shooting
@@ -501,28 +511,29 @@ class Game {
   private handleAiming(aim: ShotInput): void {
     if (this.state.turn !== this.mySeat || this.state.over || this.playback) return;
 
-    const rig = this.rigs[this.mySeat];
-    rig?.setAim(aim.angle);
-    rig?.setDraw(aim.power);
+    this.aim = aim;
+    this.rigs[this.mySeat]?.setAim(aim.pitch, aim.yaw);
+    this.rigs[this.mySeat]?.setDraw(aim.power);
     this.hud.setPower(aim.power);
+    this.hud.setElevation(aim.pitch);
 
     const arena = arenaByIndex(this.state.arenaIndex);
     const archers = archersFor(this.state);
-    this.arenaView.showGuide(
-      previewPath(arena, archers[this.mySeat], aim),
-      this.mySeat === 0 ? 0xfca5a5 : 0x93c5fd,
+    this.arenaView.showTracer(
+      previewPath(arena, archers[this.mySeat], facingOf(this.mySeat), aim),
+      0xffffff,
     );
 
     const now = performance.now();
     if (!this.vsBot && now - this.lastAimSent > AIM_BROADCAST_MS) {
       this.lastAimSent = now;
-      this.net.sendRealtime('aim', { angle: aim.angle });
+      this.net.sendRealtime('aim', { pitch: aim.pitch, yaw: aim.yaw });
     }
   }
 
   private cancelAim(): void {
     this.hud.setPower(null);
-    this.arenaView.hideGuide();
+    this.arenaView.hideTracer();
     this.rigs[this.mySeat]?.setDraw(0);
   }
 
@@ -556,26 +567,30 @@ class Game {
     const result = simulateShot(arena, archers, seat, input);
 
     this.aimController?.setEnabled(false);
-    this.rigs[seat]?.setAim(input.angle);
+    this.rigs[seat]?.setAim(input.pitch, input.yaw);
     this.rigs[seat]?.release();
     this.arenaView.clearTrail();
     this.remoteAim = null;
+    if (seat === this.mySeat) this.hud.setElevation(input.pitch);
 
     this.playback = { path: result.path, startedAt: performance.now() };
 
     const flightMs = (result.flightTime * 1000) / PLAYBACK_SPEED;
-    window.setTimeout(() => {
-      this.playback = null;
-      this.arenaView.hideArrow();
-      if (zone) this.rigs[seat === 0 ? 1 : 0]?.flashHit();
-      this.hud.showShotResult(zone, damage, blocked);
-      this.updateHealthPlates();
+    window.setTimeout(
+      () => {
+        this.playback = null;
+        this.arenaView.hideArrow();
+        if (zone) this.rigs[seat === 0 ? 1 : 0]?.flashHit();
+        this.hud.showShotResult(zone, damage, blocked);
+        this.refreshHealth();
 
-      if (this.vsBot && seat === 1) {
-        recordBotOutcome(this.botMemory, result.path, archers[0], -1);
-      }
-      this.refreshTurn();
-    }, Math.max(MIN_SHOT_MS, flightMs));
+        if (this.vsBot && seat === 1) {
+          recordBotOutcome(this.botMemory, result.path, archers[0], facingOf(1));
+        }
+        this.refreshTurn();
+      },
+      Math.max(MIN_SHOT_MS, flightMs),
+    );
   }
 
   // ---------------------------------------------------------------- ending
@@ -638,7 +653,7 @@ class Game {
     this.hud.setVisible(false);
     if (!this.vsBot) {
       this.net.leave();
-      if (this.net.embedded) {
+      if (this.hosted) {
         this.net.exit();
         return;
       }
@@ -679,7 +694,7 @@ class Game {
     this.rigs[1]?.update(now);
 
     if (this.remoteAim) {
-      this.rigs[this.remoteAim.seat]?.setAim(this.remoteAim.angle);
+      this.rigs[this.remoteAim.seat]?.setAim(this.remoteAim.pitch, this.remoteAim.yaw);
       this.rigs[this.remoteAim.seat]?.setDraw(0.7);
     }
 
@@ -689,8 +704,20 @@ class Game {
       const point = this.playback.path[index];
       if (point) {
         this.arenaView.setArrow(point, this.playback.path[Math.max(0, index - 1)] ?? null);
-        if (index % 4 === 0) this.arenaView.pushTrail(point);
+        if (index % 3 === 0) this.arenaView.pushTrail(point);
       }
+    }
+
+    if (this.state.started) {
+      const archers = archersFor(this.state);
+      const me = archers[this.mySeat];
+      this.cameraOrigin.set(me.pos.x, me.pos.y, me.pos.z);
+      scene.placeCamera({
+        origin: this.cameraOrigin,
+        facing: facingOf(this.mySeat),
+        pitch: this.aim.pitch,
+        yaw: this.aim.yaw,
+      });
     }
 
     scene.render();

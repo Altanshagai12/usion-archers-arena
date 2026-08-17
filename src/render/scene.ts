@@ -1,6 +1,11 @@
 /**
  * three.js renderer, camera and lighting.
  *
+ * The camera sits behind and slightly above the local archer, looking
+ * down-range at the opponent — the over-the-shoulder view the game is played
+ * from. It swings a little with the aim so pulling the bow feels connected to
+ * the world rather than to a slider.
+ *
  * Two embedded-WebView rules are baked in here, both of which have broken real
  * Usion games before:
  *
@@ -19,24 +24,32 @@ export interface Viewport {
   height: number;
 }
 
+export interface ScenePalette {
+  sky: [number, number];
+  fog: number;
+  sun: number;
+  ambient: number;
+}
+
+export interface CameraShot {
+  /** Feet position of the archer we are standing behind. */
+  origin: THREE.Vector3;
+  /** +1 shoots toward +z, -1 toward -z. */
+  facing: 1 | -1;
+  pitch: number;
+  yaw: number;
+}
+
 export interface SceneHandles {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   root: THREE.Group;
   sun: THREE.DirectionalLight;
-  ambient: THREE.HemisphereLight;
   setPalette(palette: ScenePalette): void;
-  frameArena(left: number, right: number, top: number): void;
+  placeCamera(shot: CameraShot): void;
   render(): void;
   dispose(): void;
-}
-
-export interface ScenePalette {
-  sky: [number, number];
-  fog: number;
-  sun: number;
-  ambient: number;
 }
 
 /** Resolve once the mount element has a real size. */
@@ -97,6 +110,13 @@ function makeSkyTexture(top: number, bottom: number): THREE.Texture {
   return texture;
 }
 
+/** Over-the-shoulder offsets, in metres, relative to the archer's feet. */
+const EYE_BACK = 4.4;
+const EYE_UP = 2.5;
+const EYE_SIDE = 0.5;
+const LOOK_AHEAD = 18;
+const LOOK_UP = 1.3;
+
 export function createScene(mount: HTMLElement, viewport: Viewport): SceneHandles {
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
@@ -118,33 +138,34 @@ export function createScene(mount: HTMLElement, viewport: Viewport): SceneHandle
   mount.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
+  // Long far plane: the ridge line sits ~200 m out behind the target.
   const camera = new THREE.PerspectiveCamera(
-    38,
+    55,
     viewport.width / Math.max(1, viewport.height),
-    0.5,
-    400,
+    0.3,
+    600,
   );
-  camera.position.set(0, 6, 34);
-  camera.lookAt(0, 3, 0);
+  camera.position.set(0, 3, -5);
+  camera.lookAt(0, 1.5, 10);
 
   const root = new THREE.Group();
   scene.add(root);
 
-  const sun = new THREE.DirectionalLight(0xffffff, 2.1);
-  sun.position.set(-14, 26, 18);
+  const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+  sun.position.set(-30, 46, 20);
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
   sun.shadow.camera.near = 1;
-  sun.shadow.camera.far = 90;
+  sun.shadow.camera.far = 160;
   sun.shadow.camera.left = -40;
   sun.shadow.camera.right = 40;
-  sun.shadow.camera.top = 30;
-  sun.shadow.camera.bottom = -10;
-  sun.shadow.bias = -0.0012;
+  sun.shadow.camera.top = 40;
+  sun.shadow.camera.bottom = -20;
+  sun.shadow.bias = -0.0015;
   scene.add(sun);
   scene.add(sun.target);
 
-  const ambient = new THREE.HemisphereLight(0xffffff, 0x404040, 1.1);
+  const ambient = new THREE.HemisphereLight(0xffffff, 0x404040, 1.15);
   scene.add(ambient);
 
   let skyTexture: THREE.Texture | null = null;
@@ -153,37 +174,37 @@ export function createScene(mount: HTMLElement, viewport: Viewport): SceneHandle
     skyTexture?.dispose();
     skyTexture = makeSkyTexture(palette.sky[0], palette.sky[1]);
     scene.background = skyTexture;
-    scene.fog = new THREE.Fog(palette.fog, 55, 190);
+    // Fog starts past the target so the ridge line hazes out, not the action.
+    scene.fog = new THREE.Fog(palette.fog, 90, 380);
     sun.color.setHex(palette.sun);
     ambient.color.setHex(palette.sky[1]);
     ambient.groundColor.setHex(palette.ambient);
   };
 
-  /**
-   * Fit both archers on screen. Portrait phones are much narrower than the
-   * arena is wide, so the distance is solved from the horizontal FOV too and
-   * the wider of the two constraints wins.
-   */
-  const frameArena = (left: number, right: number, top: number): void => {
-    const centreX = (left + right) / 2;
-    // Keep the margin tight. The archers are 1.8 m in an ~20 m arena, so every
-    // extra metre of padding costs real readability on a phone; a full-power
-    // arc can leave the top of frame, which the arrow trail covers for.
-    const span = Math.max(6, right - left) * 1.04;
-    const height = Math.max(5, top + 3.2);
+  const eye = new THREE.Vector3();
+  const focus = new THREE.Vector3();
 
-    const vFov = (camera.fov * Math.PI) / 180;
-    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+  const placeCamera = (shot: CameraShot): void => {
+    const { origin, facing, pitch, yaw } = shot;
 
-    const distanceForWidth = span / 2 / Math.tan(hFov / 2);
-    const distanceForHeight = height / 2 / Math.tan(vFov / 2);
-    const distance = Math.max(distanceForWidth, distanceForHeight) + 1.5;
+    // Sit behind the archer. Yaw slides the eye sideways and swings the look
+    // point across, which reads as leaning into the shot; pitch lifts the look
+    // point so a high-angle shot shows more sky.
+    const lateral = EYE_SIDE * facing + Math.sin(yaw) * 5 * facing;
+    eye.set(origin.x + lateral, origin.y + EYE_UP, origin.z - EYE_BACK * facing);
 
-    camera.position.set(centreX, top * 0.5 + 2.4, distance);
-    camera.lookAt(centreX, top * 0.45 + 1.2, 0);
+    focus.set(
+      origin.x + Math.sin(yaw) * LOOK_AHEAD * facing * 1.6,
+      origin.y + LOOK_UP + Math.sin(pitch) * 9,
+      origin.z + LOOK_AHEAD * facing,
+    );
 
-    sun.target.position.set(centreX, 0, 0);
-    sun.position.set(centreX - 16, 28, 20);
+    camera.position.copy(eye);
+    camera.lookAt(focus);
+
+    // Keep the shadow frustum over the action rather than the world origin.
+    sun.target.position.set(origin.x, 0, origin.z + 20 * facing);
+    sun.position.set(origin.x - 30, 46, origin.z + 20 * facing);
     sun.target.updateMatrixWorld();
   };
 
@@ -203,9 +224,8 @@ export function createScene(mount: HTMLElement, viewport: Viewport): SceneHandle
     camera,
     root,
     sun,
-    ambient,
     setPalette,
-    frameArena,
+    placeCamera,
     render: () => renderer.render(scene, camera),
     dispose: () => {
       observer.disconnect();
