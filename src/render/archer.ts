@@ -102,9 +102,28 @@ export class ArcherRig {
     this.setupAnimation(character, options.model);
     this.attachBow(character, bow);
 
-    quiver.position.set(-0.22, 0.95, -0.16);
-    quiver.rotation.set(0.22, 0, 0.32);
-    this.bodyPivot.add(quiver);
+    this.attachQuiver(character, quiver);
+  }
+
+  /**
+   * Strap the quiver to the back. Sitting on a group beside the character, it
+   * stayed hanging in mid-air when the death clip put the body on the ground.
+   */
+  private attachQuiver(character: THREE.Object3D, quiver: THREE.Object3D): void {
+    const spine = this.findBone(character, 'Torso', 'Chest', 'Spine02', 'Abdomen', 'Body');
+    if (!spine) {
+      quiver.position.set(-0.22, 0.95, -0.16);
+      quiver.rotation.set(0.22, 0, 0.32);
+      this.bodyPivot.add(quiver);
+      return;
+    }
+    const holder = new THREE.Group();
+    const scale = spine.getWorldScale(this.scratch).x;
+    holder.scale.setScalar(scale > 0 ? 1 / scale : 1);
+    holder.position.set(-0.16, 0.08, -0.15);
+    holder.rotation.set(0.25, 0, 0.32);
+    holder.add(quiver);
+    spine.add(holder);
   }
 
   /**
@@ -145,22 +164,28 @@ export class ArcherRig {
     return action;
   }
 
-  private findBone(root: THREE.Object3D, name: string): THREE.Bone | null {
+  /**
+   * Find a bone by name, ignoring punctuation.
+   *
+   * three sanitises node names on import — PropertyBinding strips dots, so the
+   * rig's "Wrist.L" arrives as "WristL". Matching the raw name silently found
+   * nothing, which is how the bow ended up on a fallback pivot, floating
+   * beside the body instead of sitting in the hand.
+   */
+  private findBone(root: THREE.Object3D, ...names: string[]): THREE.Bone | null {
+    const key = (value: string): string => value.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    const wanted = names.map(key);
     let found: THREE.Bone | null = null;
     root.traverse((child) => {
-      if (!found && (child as THREE.Bone).isBone && child.name === name) {
-        found = child as THREE.Bone;
-      }
+      if (found || !(child as THREE.Bone).isBone) return;
+      if (wanted.includes(key(child.name))) found = child as THREE.Bone;
     });
     return found;
   }
 
   /** Hang the bow off a wrist so it follows whatever the clip does. */
   private attachBow(character: THREE.Object3D, bow: THREE.Object3D): void {
-    const wrist =
-      this.findBone(character, 'Wrist.L') ??
-      this.findBone(character, 'LeftHand') ??
-      this.findBone(character, 'Wrist.R');
+    const wrist = this.findBone(character, 'Wrist.L', 'LeftHand', 'Hand.L', 'Wrist.R');
 
     if (!wrist) {
       this.bowPivot.add(bow);
