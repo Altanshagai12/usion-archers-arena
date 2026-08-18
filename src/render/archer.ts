@@ -38,6 +38,8 @@ const BOW_REST = new THREE.Vector3(0.3, 1.22, 0.52);
 const RISE_RATE = 0.85;
 /** Beat spent lying on the ground between falling and getting up. */
 const DOWN_SECONDS = 0.55;
+/** How far the nock travels back at full draw, in metres. */
+const DRAW_TRAVEL = 0.34;
 
 type Phase = 'idle' | 'aiming' | 'shooting' | 'falling' | 'down' | 'rising';
 
@@ -65,6 +67,12 @@ export class ArcherRig {
 
   /** Bone whose position the bow follows each frame. */
   private bowHand: THREE.Bone | null = null;
+
+  private bow: THREE.Object3D | null = null;
+  private stringLine: THREE.Line | null = null;
+  /** Limb tips in the bow's OWN frame, measured before it is parented. */
+  private readonly limbTop = new THREE.Vector3();
+  private readonly limbBottom = new THREE.Vector3();
 
   private drawAmount = 0;
   private smoothedDraw = 0;
@@ -103,9 +111,89 @@ export class ArcherRig {
     });
 
     this.setupAnimation(character, options.model);
+    this.measureLimbs(bow);
     this.attachBow(character, bow);
+    this.buildString();
 
     this.attachQuiver(character, quiver);
+  }
+
+  private measureLimbs(bow: THREE.Object3D): void {
+    // Measured BEFORE parenting: Box3.setFromObject returns world bounds, so
+    // afterwards these would be the bow's position in the scene instead.
+    bow.updateWorldMatrix(false, true);
+    const box = new THREE.Box3().setFromObject(bow);
+    const size = new THREE.Vector3();
+    const centre = new THREE.Vector3();
+    box.getSize(size);
+    box.getCenter(centre);
+    this.limbTop.set(centre.x, centre.y + size.y * 0.45, centre.z);
+    this.limbBottom.set(centre.x, centre.y - size.y * 0.45, centre.z);
+  }
+
+  /**
+   * A three-point line standing in for the bowstring.
+   *
+   * The character's clips are gun clips, so the rear hand never actually draws
+   * — and the modelled string on the bow mesh is straight and cannot animate.
+   * This one bends back into a deepening V as the shot is pulled, which is what
+   * makes the draw read at all.
+   */
+  private buildString(): void {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
+    const material = new THREE.LineBasicMaterial({
+      color: 0xf6f2e4,
+      transparent: true,
+      opacity: 0.95,
+    });
+    const line = new THREE.Line(geometry, material);
+    line.frustumCulled = false;
+    line.visible = false;
+    this.stringLine = line;
+    this.group.add(line);
+  }
+
+  /**
+   * Rebuild the bowstring.
+   *
+   * The line lives under `group`, so each point is converted out of world
+   * space before it is written — writing world coordinates into a child
+   * applies the parent transform twice and throws the string across the scene.
+   */
+  private updateString(draw: number): void {
+    const line = this.stringLine;
+    const bow = this.bow;
+    if (!line || !bow) return;
+
+    if (draw < 0.04 || this.isKnockedDown) {
+      line.visible = false;
+      return;
+    }
+
+    const positions = line.geometry.getAttribute('position') as THREE.BufferAttribute;
+    bow.updateWorldMatrix(true, false);
+
+    this.scratch.copy(this.limbTop).applyMatrix4(bow.matrixWorld);
+    this.group.worldToLocal(this.scratch);
+    positions.setXYZ(0, this.scratch.x, this.scratch.y, this.scratch.z);
+
+    // Nock: the bow's middle, pulled back along the archer's own backward
+    // direction so the string bends into a V as the shot is drawn.
+    this.scratchB.set(0, 0, 0).applyMatrix4(bow.matrixWorld);
+    this.facingGroup.worldToLocal(this.scratchB);
+    this.scratchB.z -= draw * DRAW_TRAVEL;
+    this.facingGroup.localToWorld(this.scratchB);
+    this.group.worldToLocal(this.scratchB);
+    positions.setXYZ(1, this.scratchB.x, this.scratchB.y, this.scratchB.z);
+
+    this.scratch.copy(this.limbBottom).applyMatrix4(bow.matrixWorld);
+    this.group.worldToLocal(this.scratch);
+    positions.setXYZ(2, this.scratch.x, this.scratch.y, this.scratch.z);
+
+    positions.needsUpdate = true;
+    line.geometry.computeBoundingSphere();
+    line.visible = true;
   }
 
   /**
@@ -201,6 +289,7 @@ export class ArcherRig {
    * further down-range is the one that supports the bow.
    */
   private attachBow(character: THREE.Object3D, bow: THREE.Object3D): void {
+    this.bow = bow;
     this.bowPivot.add(bow);
 
     const aim = this.actions.get('Idle_Gun_Pointing');
@@ -368,6 +457,10 @@ export class ArcherRig {
     }
     this.bowPivot.rotation.x = -this.pitch * 0.75;
 
+    // The string is rebuilt last, once the bow has taken its place.
+    this.group.updateWorldMatrix(true, true);
+    this.updateString(this.smoothedDraw);
+
     const flashing = nowMs < this.flashUntil;
     if (!this.character || (!flashing && !this.wasFlashing)) {
       this.wasFlashing = flashing;
@@ -388,6 +481,7 @@ export class ArcherRig {
   }
 
   dispose(): void {
+    this.stringLine?.geometry.dispose();
     this.mixer?.stopAllAction();
     this.group.removeFromParent();
   }

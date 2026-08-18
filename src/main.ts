@@ -654,7 +654,10 @@ class Game {
         const before = path[path.length - 2] ?? null;
         this.playback = null;
         this.arenaView.hideArrow();
-        if (last) this.arenaView.stickArrow(last, before);
+        // Only a MISS leaves a shaft standing. An arrow stuck in a body
+        // stayed hanging in mid-air the moment the knockdown put that body on
+        // the ground, and the shaft is only useful as a range marker anyway.
+        if (last && !zone) this.arenaView.stickArrow(last, before);
         if (zone) this.rigs[seat === 0 ? 1 : 0]?.knockDown();
         this.hud.showShotResult(zone, damage, blocked);
         this.refreshHealth();
