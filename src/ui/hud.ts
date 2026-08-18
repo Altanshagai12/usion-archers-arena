@@ -6,6 +6,7 @@
  * It owns no game state — `main.ts` pushes everything in.
  */
 
+import type { HeightTier } from '../arenas';
 import { t, formatNumber } from '../i18n';
 import { pitchToDegrees } from '../sim';
 import { button, el, show } from './dom';
@@ -18,11 +19,17 @@ export interface ResultActions {
 
 const GAUGE_TICKS = 13;
 
+/** Steps drawn in the height badge, shortest first. */
+const HEIGHT_STEPS = 3;
+const TIER_STEPS: Record<HeightTier, number> = { ground: 1, mid: 2, high: 3 };
+
 interface HealthPanel {
   root: HTMLElement;
   name: HTMLElement;
   fill: HTMLElement;
   value: HTMLElement;
+  height: HTMLElement;
+  steps: HTMLElement[];
 }
 
 function healthPanel(side: 'you' | 'foe'): HealthPanel {
@@ -32,8 +39,25 @@ function healthPanel(side: 'you' | 'foe'): HealthPanel {
   const fill = el('div', 'health-fill');
   const value = el('div', 'health-value');
   bar.append(fill);
-  root.append(name, bar, value);
-  return { root, name, fill, value };
+
+  // Height badge: a rising staircase filled up to this archer's step, with
+  // the word beside it. The picture reads at a glance and the word removes
+  // any doubt about which end of the scale it is.
+  const height = el('div', 'height');
+  const stairs = el('div', 'height-steps');
+  // Decorative: the word beside it carries the meaning for screen readers.
+  stairs.setAttribute('aria-hidden', 'true');
+  const steps: HTMLElement[] = [];
+  for (let i = 0; i < HEIGHT_STEPS; i += 1) {
+    const step = el('div', 'height-step');
+    steps.push(step);
+    stairs.append(step);
+  }
+  const word = el('span', 'height-word');
+  height.append(stairs, word);
+
+  root.append(name, bar, value, height);
+  return { root, name, fill, value, height: word, steps };
 }
 
 export class Hud {
@@ -130,6 +154,24 @@ export class Hud {
   setNames(you: string, foe: string): void {
     this.you.name.textContent = you;
     this.foe.name.textContent = foe;
+  }
+
+  /**
+   * How high each archer stands. Called once per arena — the mounds do not
+   * move, and knockback slides an archer backwards, never downhill.
+   */
+  setHeights(you: HeightTier, foe: HeightTier): void {
+    for (const [panel, tier] of [
+      [this.you, you],
+      [this.foe, foe],
+    ] as Array<[HealthPanel, HeightTier]>) {
+      const filled = TIER_STEPS[tier];
+      panel.steps.forEach((step, index) => step.classList.toggle('on', index < filled));
+      // The label goes on the word, not the panel: an aria-label on the panel
+      // would mask the name and the health value it wraps.
+      panel.height.textContent = t(`height.${tier}`);
+      panel.height.setAttribute('aria-label', `${t('height.label')}: ${t(`height.${tier}`)}`);
+    }
   }
 
   setHealth(side: 'you' | 'foe', health: number, max: number): void {

@@ -318,6 +318,23 @@ export const ARENAS: ArenaDefinition[] = [
   },
 ];
 
+/**
+ * How high a firing position reads to a player.
+ *
+ * Standing high barely shows from your own shoulder — you cannot see the
+ * ground you are standing on — so the height each archer holds is stated
+ * outright rather than left to be inferred from the view. Three steps, not a
+ * number in metres: what matters is whether you are shooting down at them,
+ * up at them, or across.
+ */
+export type HeightTier = 'ground' | 'mid' | 'high';
+
+export function heightTier(metres: number): HeightTier {
+  if (metres >= 4) return 'high';
+  if (metres >= 2) return 'mid';
+  return 'ground';
+}
+
 export function arenaByIndex(index: number): ArenaDefinition {
   const clamped = Math.min(ARENAS.length - 1, Math.max(0, Math.floor(index)));
   return ARENAS[clamped];

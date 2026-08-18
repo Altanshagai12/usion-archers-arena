@@ -21,6 +21,9 @@ const EYE_UP = 2.9;
 const EYE_SIDE = 1.6;
 const LOOK_AHEAD = 18;
 const LOOK_UP = 1.3;
+/** Extra eye height and set-back per metre of high ground, so the drop shows. */
+const HIGH_GROUND_LIFT = 0.5;
+const HIGH_GROUND_BACK = 0.55;
 
 /**
  * Approach view: the camera keeps YOUR line of sight and simply flies down the
@@ -52,6 +55,15 @@ export type ViewRequest =
       /** The direction the VIEWER shoots, so approach never crosses the lane. */
       facing: 1 | -1;
       pitch: number;
+      /**
+       * Where the other archer stands.
+       *
+       * The shoulder view aims the horizon at them, which is the only thing
+       * that makes your own height readable from your own eyes: standing on a
+       * mound looks like standing on flat ground until the ground you are
+       * shooting at is visibly below you.
+       */
+      look: THREE.Vector3;
     }
   | {
       kind: 'flight';
@@ -111,14 +123,23 @@ export class CameraDirector {
     const { origin, facing, pitch } = view;
 
     if (view.kind === 'shoulder') {
+      // How far above the opponent we are — the cue the whole view turns on.
+      const drop = view.look.y - origin.y;
+      // Shooting down wants a higher, further-back camera so the slope below
+      // you comes into frame; shooting up needs neither.
+      const lift = Math.max(0, -drop);
       this.desiredEye.set(
         origin.x + EYE_SIDE * facing,
-        origin.y + EYE_UP,
-        origin.z - EYE_BACK * facing,
+        origin.y + EYE_UP + lift * HIGH_GROUND_LIFT,
+        origin.z - (EYE_BACK + lift * HIGH_GROUND_BACK) * facing,
       );
+      // Tilt the horizon toward them, in proportion to how much of the way
+      // down-range the focus point sits.
+      const span = Math.abs(view.look.z - origin.z) || 1;
+      const reach = Math.min(1, LOOK_AHEAD / span);
       this.desiredFocus.set(
         origin.x,
-        origin.y + LOOK_UP + Math.sin(pitch) * 9,
+        origin.y + drop * reach + LOOK_UP + Math.sin(pitch) * 9,
         origin.z + LOOK_AHEAD * facing,
       );
       return;

@@ -352,6 +352,51 @@ button:focus-visible,
   margin-left: auto;
 }
 
+/* Height badge: a three-step staircase plus the word for it. */
+.health .height {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.health.foe .height {
+  flex-direction: row-reverse;
+}
+
+.height-steps {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 11px;
+}
+
+.health.foe .height-steps {
+  flex-direction: row-reverse;
+}
+
+.height-step {
+  width: 3px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.height-step:nth-child(1) { height: 4px; }
+.height-step:nth-child(2) { height: 7px; }
+.height-step:nth-child(3) { height: 11px; }
+
+.height-step.on {
+  background: #56b7f0;
+}
+
+.health.foe .height-step.on {
+  background: #e0574f;
+}
+
 .health-fill.low {
   background: #fbbf24;
 }

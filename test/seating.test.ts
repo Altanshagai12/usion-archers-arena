@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { ARENAS } from '../src/arenas';
+import { ARENAS, heightTier } from '../src/arenas';
 import { applyAction, archersFor, emptyMatch, replay, seatOfPlayer } from '../src/match';
 import type { MatchAction, MatchState, Seat } from '../src/match';
 import type { ArcherStats } from '../src/sim';
@@ -77,6 +77,25 @@ describe('seating', () => {
     const state = replay(log, blindRoster);
     expect(seatOfPlayer(state, P1)).toBe(1);
     expect(state.lastShot?.seat).toBe(1);
+  });
+
+  it('gives the two archers different height tiers, so the badge always says something', () => {
+    // The badge exists because standing high does not read from your own
+    // shoulder. It is worthless if both ends show the same word.
+    for (let index = 0; index < ARENAS.length; index += 1) {
+      const state = start({ arenaIndex: index, players: [P0, P1], stats: [STATS, STATS] });
+      const [near, far] = archersFor(state);
+      expect(heightTier(near.pos.y)).not.toBe(heightTier(far.pos.y));
+    }
+  });
+
+  it('reads height in three steps', () => {
+    expect(heightTier(0)).toBe('ground');
+    expect(heightTier(1.9)).toBe('ground');
+    expect(heightTier(2)).toBe('mid');
+    expect(heightTier(3.9)).toBe('mid');
+    expect(heightTier(4)).toBe('high');
+    expect(heightTier(9)).toBe('high');
   });
 
   it('puts the two archers at different heights in every arena', () => {

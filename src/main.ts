@@ -14,7 +14,7 @@ import './ui/styles.css';
 
 import * as THREE from 'three';
 
-import { arenaByIndex, highestUnlockedArena } from './arenas';
+import { arenaByIndex, heightTier, highestUnlockedArena } from './arenas';
 import { chooseBotShot, createBotMemory, recordBotOutcome } from './bot';
 import { setLanguage, t } from './i18n';
 import { AimController } from './input';
@@ -126,6 +126,8 @@ class Game {
   private remoteAim: { seat: Seat; pitch: number } | null = null;
   private readonly cameraDirector = new CameraDirector();
   private readonly cameraOrigin = new THREE.Vector3();
+  /** Where the shoulder view points — the other archer. */
+  private readonly cameraLook = new THREE.Vector3();
   private readonly sunAnchor = new THREE.Vector3();
   private readonly arrowAt = new THREE.Vector3();
   private readonly arrowHeading = new THREE.Vector3();
@@ -661,6 +663,11 @@ class Game {
 
     const opponentName = this.vsBot ? 'Bot' : t('hud.opponent');
     this.hud.setNames(t('hud.you'), opponentName);
+    const foe: Seat = this.mySeat === 0 ? 1 : 0;
+    this.hud.setHeights(
+      heightTier(archers[this.mySeat].pos.y),
+      heightTier(archers[foe].pos.y),
+    );
     this.refreshHealth();
     this.cameraDirector.snap();
   }
@@ -929,6 +936,7 @@ class Game {
         // watched from their shoulder rather than from across the range.
         const seat: Seat = this.state.over ? this.mySeat : this.state.turn;
         const archer = archers[seat];
+        const other = archers[seat === 0 ? 1 : 0];
         const mine = seat === this.mySeat;
         const rig = this.rigs[seat];
         // Track the rig, not the mark, so the camera does not run ahead of an
@@ -945,6 +953,9 @@ class Game {
           // line toward the opponent instead of swinging around behind them.
           facing: facingOf(this.mySeat),
           pitch: mine ? this.aim.pitch : this.opponentPitch,
+          // Aim the horizon at the other archer, which is what makes your own
+          // height readable from your own eyes.
+          look: this.cameraLook.set(other.pos.x, other.pos.y, other.pos.z),
         };
         this.sunAnchor.set(archer.pos.x, 0, archer.pos.z + 20 * facingOf(seat));
       }
