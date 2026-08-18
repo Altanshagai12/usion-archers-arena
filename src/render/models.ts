@@ -16,6 +16,7 @@ import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.j
 import { fallbackModel } from './fallback';
 
 export type ModelKey =
+  | 'archer_hero'
   | 'archer_rigged'
   | 'archer_a'
   | 'archer_b'
@@ -60,6 +61,7 @@ const HELD_IN_HAND: ReadonlySet<ModelKey> = new Set<ModelKey>(['bow', 'arrow']);
 
 /** Target size in metres for each model, applied after normalisation. */
 const TARGET_HEIGHT: Record<ModelKey, number> = {
+  archer_hero: 1.78,
   archer_rigged: 1.78,
   archer_a: 1.78,
   archer_b: 1.78,
@@ -83,6 +85,8 @@ const BASE_URL = `${import.meta.env.BASE_URL}models/`;
 // The decoder is bundled with three, so this costs no extra network request.
 const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 const cache = new Map<ModelKey, THREE.Group>();
+/** Authored clips that shipped with a model, kept beside its template. */
+const clips = new Map<ModelKey, THREE.AnimationClip[]>();
 const pending = new Map<ModelKey, Promise<THREE.Group>>();
 
 function normalise(
@@ -181,6 +185,7 @@ export async function loadModel(key: ModelKey): Promise<THREE.Group> {
         HELD_IN_HAND.has(key),
       );
       cache.set(key, normalised);
+      clips.set(key, gltf.animations ?? []);
       pending.delete(key);
       return normalised;
     })
@@ -191,6 +196,14 @@ export async function loadModel(key: ModelKey): Promise<THREE.Group> {
 
   pending.set(key, promise);
   return promise;
+}
+
+/**
+ * Animation clips that shipped with a model. Empty until it has loaded, and
+ * empty forever for models that carry none.
+ */
+export function animationsFor(key: ModelKey): THREE.AnimationClip[] {
+  return clips.get(key) ?? [];
 }
 
 /**

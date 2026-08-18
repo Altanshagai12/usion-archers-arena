@@ -1,25 +1,25 @@
 /**
- * One archer.
+ * One archer, driven by the character's own authored animation clips.
  *
- * The character mesh is used exactly as generated, and no bone is ever touched.
- * That is the conclusion of three attempts at articulating it:
+ * The mesh is a CC0 rigged character that ships with a full clip set — idle,
+ * a two-handed aiming pose, a shoot, a hit reaction and a death. Playing those
+ * is the whole animation system: nothing here poses a bone by hand.
  *
- *   - Full-arm IK against the auto-rigged skeleton scrambled the figure.
- *   - A single bounded rotation on an upper arm dragged the head into a spike,
- *     because the auto-rigger weights head vertices onto arm bones.
- *   - The rigged mesh itself is re-posed into a T-pose by the rigger, so it
- *     stands like a mannequin with both arms straight out. The un-rigged
- *     meshes are the ones that actually stand like archers.
+ * That is the conclusion of three failed attempts at articulating the
+ * AI-generated characters: whole-arm IK scrambled the figure, a single
+ * upper-arm rotation dragged the head into a spike (head vertices were
+ * weighted onto arm bones), and the auto-rigger re-posed its own output into a
+ * T-pose mannequin. Generated meshes could not be animated; an authored rig
+ * can, and it looks right because an animator posed it.
  *
- * So the skeleton is not used at all. Every animation lives on groups this code
- * owns, where it cannot deform the silhouette — the one thing a player reads:
+ *   idle      standing, breathing
+ *   aiming    crossfade to the aiming pose as the shot is drawn
+ *   release   the shoot clip, once
+ *   knocked   the death clip forward to go down, then the SAME clip in reverse
+ *             to get back up — which reads as a person pushing themselves up
  *
- *   aim      the bow tilts onto the aim line
- *   draw     the bow rides out from a low carry to full extension, a procedural
- *            bowstring bends back into a deepening V, and the torso leans in
- *   release  the bow kicks back toward the body, then settles
- *   knocked  the archer falls backwards, lies a beat, then gets up in two
- *            pushes — onto a knee, gather, onto the feet
+ * The bow is parented to a wrist bone, so it follows the animated hand. Only
+ * its tilt onto the aim line is driven from here.
  *
  * Everything hangs off `facingGroup`, inside which local +z is always
  * "down-range".
@@ -27,33 +27,25 @@
 
 import * as THREE from 'three';
 
-import { instantiate } from './models';
+import { animationsFor, instantiate } from './models';
 import type { ModelKey } from './models';
 
-/**
- * Bow carry position, relative to the archer's feet: out to the bow side and
- * clear in front of the chest, so it never buries itself in the torso.
- */
+/** Fallback bow carry for a mesh with no skeleton to hang it on. */
 const BOW_REST = new THREE.Vector3(0.3, 1.22, 0.52);
-/** Where the bow sits at full draw — pushed out and lifted. */
-const BOW_DRAWN = new THREE.Vector3(0.33, 1.38, 0.66);
 
-/** How far the nock travels back at full draw, in metres. */
-const DRAW_TRAVEL = 0.34;
+/** Seconds of the death clip; the rise replays it backwards at this rate. */
+const RISE_RATE = 0.85;
+/** Beat spent lying on the ground between falling and getting up. */
+const DOWN_SECONDS = 0.55;
 
-const FALL_SECONDS = 0.3;
-const DOWN_SECONDS = 0.5;
-const KNEE_SECONDS = 0.32;
-const STAND_SECONDS = 0.5;
-const KNOCKED_TOTAL = FALL_SECONDS + DOWN_SECONDS + KNEE_SECONDS + STAND_SECONDS;
-
-const FLAT_ANGLE = 1.5;
-const KNEE_ANGLE = 0.55;
+type Phase = 'idle' | 'aiming' | 'shooting' | 'falling' | 'down' | 'rising';
 
 export interface ArcherVisualOptions {
   model: ModelKey;
   /** +1 shoots toward +z, -1 toward -z. */
   facing: 1 | -1;
+  /** Blended into the character's base colour to tell the two sides apart. */
+  tint?: number;
 }
 
 export class ArcherRig {
@@ -64,12 +56,13 @@ export class ArcherRig {
   private readonly bodyPivot = new THREE.Group();
 
   private character: THREE.Object3D | null = null;
-  private bow: THREE.Object3D | null = null;
+  private mixer: THREE.AnimationMixer | null = null;
+  private readonly actions = new Map<string, THREE.AnimationAction>();
+  private current: THREE.AnimationAction | null = null;
+  private phase: Phase = 'idle';
+  private phaseTimer = 0;
 
-  private stringLine: THREE.Line | null = null;
-  /** Limb tips in the bow's OWN frame, measured before it is parented. */
-  private readonly limbTop = new THREE.Vector3();
-  private readonly limbBottom = new THREE.Vector3();
+  private bowHolder: THREE.Group | null = null;
 
   private drawAmount = 0;
   private smoothedDraw = 0;
@@ -77,11 +70,8 @@ export class ArcherRig {
   private flashUntil = 0;
   private wasFlashing = false;
   private recoil = 0;
-  private knockedFor = -1;
-  private breathePhase = Math.random() * Math.PI * 2;
 
   private readonly scratch = new THREE.Vector3();
-  private readonly scratchB = new THREE.Vector3();
 
   constructor(options: ArcherVisualOptions) {
     this.facingGroup.rotation.y = options.facing === 1 ? 0 : Math.PI;
@@ -101,51 +91,106 @@ export class ArcherRig {
     ]);
 
     this.character = character;
-    this.bow = bow;
     this.bodyPivot.add(character);
+    if (options.tint !== undefined) this.applyTint(character, options.tint);
 
-    // Measure the bow BEFORE parenting it. Box3.setFromObject returns WORLD
-    // bounds, so measuring afterwards yields the bow's position in the scene
-    // and the string ends up drawn as a streak across the sky.
-    this.measureLimbs(bow);
-    this.bowPivot.add(bow);
-    this.buildString();
+    // The character comes holding a sword; this one shoots.
+    character.traverse((child) => {
+      if (/sword/i.test(child.name)) child.visible = false;
+    });
+
+    this.setupAnimation(character, options.model);
+    this.attachBow(character, bow);
 
     quiver.position.set(-0.22, 0.95, -0.16);
     quiver.rotation.set(0.22, 0, 0.32);
     this.bodyPivot.add(quiver);
   }
 
-  private measureLimbs(bow: THREE.Object3D): void {
-    bow.updateWorldMatrix(false, true);
-    const box = new THREE.Box3().setFromObject(bow);
-    const size = new THREE.Vector3();
-    const centre = new THREE.Vector3();
-    box.getSize(size);
-    box.getCenter(centre);
-    // The bow is normalised upright and centred, so the tips sit on its own y.
-    this.limbTop.set(centre.x, centre.y + size.y * 0.45, centre.z);
-    this.limbBottom.set(centre.x, centre.y - size.y * 0.45, centre.z);
+  /**
+   * Clips are named `CharacterArmature|Idle` and similar, so they are matched
+   * on the suffix rather than the full string.
+   */
+  private setupAnimation(character: THREE.Object3D, model: ModelKey): void {
+    const clips = animationsFor(model);
+    if (clips.length === 0) return;
+
+    const mixer = new THREE.AnimationMixer(character);
+    this.mixer = mixer;
+
+    const want = ['Idle', 'Idle_Gun_Pointing', 'Idle_Gun_Shoot', 'HitRecieve', 'Death'];
+    for (const key of want) {
+      const clip = clips.find((c) => c.name === key || c.name.endsWith(`|${key}`));
+      if (!clip) continue;
+      const action = mixer.clipAction(clip);
+      action.enabled = true;
+      this.actions.set(key, action);
+    }
+
+    this.play('Idle', 0);
   }
 
-  /**
-   * A three-point line standing in for the bowstring. The modelled string on
-   * the bow mesh is straight and cannot animate; this one bends back to the
-   * nock, which is what makes a draw read as a draw.
-   */
-  private buildString(): void {
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
-    const material = new THREE.LineBasicMaterial({
-      color: 0xf6f2e4,
-      transparent: true,
-      opacity: 0.95,
+  private play(key: string, fade = 0.25, loop = true): THREE.AnimationAction | null {
+    const action = this.actions.get(key);
+    if (!action || action === this.current) return action ?? null;
+
+    action.reset();
+    action.timeScale = 1;
+    action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+    action.clampWhenFinished = !loop;
+    action.fadeIn(fade);
+    this.current?.fadeOut(fade);
+    action.play();
+    this.current = action;
+    return action;
+  }
+
+  private findBone(root: THREE.Object3D, name: string): THREE.Bone | null {
+    let found: THREE.Bone | null = null;
+    root.traverse((child) => {
+      if (!found && (child as THREE.Bone).isBone && child.name === name) {
+        found = child as THREE.Bone;
+      }
     });
-    const line = new THREE.Line(geometry, material);
-    line.frustumCulled = false;
-    line.visible = false;
-    this.stringLine = line;
-    this.group.add(line);
+    return found;
+  }
+
+  /** Hang the bow off a wrist so it follows whatever the clip does. */
+  private attachBow(character: THREE.Object3D, bow: THREE.Object3D): void {
+    const wrist =
+      this.findBone(character, 'Wrist.L') ??
+      this.findBone(character, 'LeftHand') ??
+      this.findBone(character, 'Wrist.R');
+
+    if (!wrist) {
+      this.bowPivot.add(bow);
+      return;
+    }
+
+    const holder = new THREE.Group();
+    // The wrist lives inside the scaled rig; undo that so the bow keeps the
+    // size it was normalised to.
+    const scale = wrist.getWorldScale(this.scratch).x;
+    holder.scale.setScalar(scale > 0 ? 1 / scale : 1);
+    holder.add(bow);
+    wrist.add(holder);
+    this.bowHolder = holder;
+    this.bowPivot.visible = false;
+  }
+
+  private applyTint(root: THREE.Object3D, tint: number): void {
+    const colour = new THREE.Color(tint);
+    root.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const cloned = list.map((material) => {
+        const copy = (material as THREE.MeshStandardMaterial).clone();
+        copy.color.lerp(colour, 0.3);
+        return copy;
+      });
+      mesh.material = Array.isArray(mesh.material) ? cloned : cloned[0];
+    });
   }
 
   /** Elevation in radians — the number the gauge shows. Aiming is Y only. */
@@ -160,127 +205,111 @@ export class ArcherRig {
   release(): void {
     this.drawAmount = 0;
     this.recoil = 1;
+    if (this.phase === 'falling' || this.phase === 'down' || this.phase === 'rising') return;
+    this.phase = 'shooting';
+    this.phaseTimer = 0;
+    this.play('Idle_Gun_Shoot', 0.08, false);
   }
 
   nock(): void {
     // The bow carries its own arrow; nothing to show or hide.
   }
 
-  /** Take a hit: fall backwards, lie a beat, then get back up. */
+  /** Take a hit: go down with the death clip, then rise by reversing it. */
   knockDown(): void {
     this.flashUntil = performance.now() + 340;
-    this.knockedFor = 0;
     this.drawAmount = 0;
+    this.phase = 'falling';
+    this.phaseTimer = 0;
+    const action = this.play('Death', 0.12, false);
+    if (action) action.timeScale = 1;
   }
 
   get isKnockedDown(): boolean {
-    return this.knockedFor >= 0;
+    return this.phase === 'falling' || this.phase === 'down' || this.phase === 'rising';
   }
 
   flashHit(): void {
     this.flashUntil = performance.now() + 340;
   }
 
-  private knockdownAngle(elapsed: number): number {
-    if (elapsed < FALL_SECONDS) {
-      const t = elapsed / FALL_SECONDS;
-      return FLAT_ANGLE * (t * t) * (1 + 0.12 * Math.sin(Math.PI * t));
+  private advancePhase(dt: number): void {
+    this.phaseTimer += dt;
+    const death = this.actions.get('Death');
+
+    switch (this.phase) {
+      case 'falling': {
+        const length = death?.getClip().duration ?? 1;
+        if (this.phaseTimer >= length) {
+          this.phase = 'down';
+          this.phaseTimer = 0;
+        }
+        break;
+      }
+      case 'down': {
+        if (this.phaseTimer < DOWN_SECONDS) break;
+        this.phase = 'rising';
+        this.phaseTimer = 0;
+        // Rewind the fall: the same motion backwards reads as pushing up.
+        if (death) {
+          death.paused = false;
+          death.timeScale = -RISE_RATE;
+          death.time = death.getClip().duration;
+          death.play();
+        }
+        break;
+      }
+      case 'rising': {
+        const length = (death?.getClip().duration ?? 1) / RISE_RATE;
+        if (this.phaseTimer >= length) {
+          this.phase = 'idle';
+          this.phaseTimer = 0;
+          this.current = null;
+          this.play('Idle', 0.2);
+        }
+        break;
+      }
+      case 'shooting': {
+        const shot = this.actions.get('Idle_Gun_Shoot');
+        if (this.phaseTimer >= (shot?.getClip().duration ?? 0.7)) {
+          this.phase = 'idle';
+          this.phaseTimer = 0;
+        }
+        break;
+      }
+      default: {
+        // Drawing the bow holds the aiming pose; otherwise stand easy.
+        const wantAim = this.smoothedDraw > 0.05;
+        if (wantAim && this.phase !== 'aiming') {
+          this.phase = 'aiming';
+          this.play('Idle_Gun_Pointing', 0.28);
+        } else if (!wantAim && this.phase === 'aiming') {
+          this.phase = 'idle';
+          this.play('Idle', 0.35);
+        }
+        break;
+      }
     }
-    const afterFall = elapsed - FALL_SECONDS;
-    if (afterFall < DOWN_SECONDS) {
-      const t = afterFall / DOWN_SECONDS;
-      return FLAT_ANGLE * (1 + 0.06 * Math.cos(t * Math.PI * 3) * (1 - t));
-    }
-    const afterDown = afterFall - DOWN_SECONDS;
-    if (afterDown < KNEE_SECONDS) {
-      const t = afterDown / KNEE_SECONDS;
-      return FLAT_ANGLE + (KNEE_ANGLE - FLAT_ANGLE) * (t * t * (3 - 2 * t));
-    }
-    const t = Math.min(1, (afterDown - KNEE_SECONDS) / STAND_SECONDS);
-    return KNEE_ANGLE * (1 - (1 - (1 - t) * (1 - t)));
-  }
-
-  /**
-   * Rebuild the bowstring.
-   *
-   * The line lives under `group`, so every point must be converted out of
-   * world space before it is written — writing world coordinates into a child
-   * applies the parent transform a second time and throws the string across
-   * the scene.
-   */
-  private updateString(draw: number): void {
-    const line = this.stringLine;
-    const bow = this.bow;
-    if (!line || !bow) return;
-
-    if (draw < 0.04) {
-      line.visible = false;
-      return;
-    }
-
-    const positions = line.geometry.getAttribute('position') as THREE.BufferAttribute;
-    bow.updateWorldMatrix(true, false);
-
-    this.scratch.copy(this.limbTop).applyMatrix4(bow.matrixWorld);
-    this.group.worldToLocal(this.scratch);
-    positions.setXYZ(0, this.scratch.x, this.scratch.y, this.scratch.z);
-
-    // Nock: the bow's middle, pulled back along the archer's own backward
-    // direction so the string bends into a V as the shot is drawn.
-    this.scratchB.set(0, 0, 0).applyMatrix4(bow.matrixWorld);
-    this.facingGroup.worldToLocal(this.scratchB);
-    this.scratchB.z -= draw * DRAW_TRAVEL;
-    this.facingGroup.localToWorld(this.scratchB);
-    this.group.worldToLocal(this.scratchB);
-    positions.setXYZ(1, this.scratchB.x, this.scratchB.y, this.scratchB.z);
-
-    this.scratch.copy(this.limbBottom).applyMatrix4(bow.matrixWorld);
-    this.group.worldToLocal(this.scratch);
-    positions.setXYZ(2, this.scratch.x, this.scratch.y, this.scratch.z);
-
-    positions.needsUpdate = true;
-    line.geometry.computeBoundingSphere();
-    line.visible = true;
   }
 
   update(nowMs: number, deltaSeconds = 1 / 60): void {
     const dt = Math.min(0.1, Math.max(0.001, deltaSeconds));
 
-    if (this.knockedFor >= 0) {
-      this.knockedFor += dt;
-      if (this.knockedFor >= KNOCKED_TOTAL) this.knockedFor = -1;
-    }
-
     this.smoothedDraw += (this.drawAmount - this.smoothedDraw) * Math.min(1, dt * 14);
-    this.breathePhase += dt * 1.9;
-
-    const angle = this.knockedFor >= 0 ? this.knockdownAngle(this.knockedFor) : 0;
-    const down = Math.min(1, angle / FLAT_ANGLE);
-    const draw = this.smoothedDraw * (1 - down);
-
-    this.facingGroup.rotation.x = -angle;
-    this.facingGroup.position.y = -down * 0.1;
-
     if (this.recoil > 0) this.recoil = Math.max(0, this.recoil - dt * 5.5);
 
-    // Torso leans into the draw and breathes while idle.
-    const settled = (1 - draw * 0.8) * (1 - down);
-    this.bodyPivot.rotation.x = -draw * 0.12 + Math.sin(this.breathePhase) * 0.012 * settled;
+    this.advancePhase(dt);
+    this.mixer?.update(dt);
 
-    // Bow: rides from the low carry out to full extension, drops with the body
-    // when knocked over, and kicks back toward the chest on release.
-    this.bowPivot.position.set(
-      THREE.MathUtils.lerp(BOW_REST.x, BOW_DRAWN.x, draw),
-      THREE.MathUtils.lerp(BOW_REST.y, BOW_DRAWN.y, draw) - down * 0.35,
-      THREE.MathUtils.lerp(BOW_REST.z, BOW_DRAWN.z, draw) - this.recoil * 0.13,
-    );
-    // Held closer to level at rest, swung fully onto the aim line as the shot
-    // is drawn — so raising the elevation is visible on the bow itself.
-    this.bowPivot.rotation.x = -this.pitch * (0.4 + 0.6 * draw) * (1 - down);
-
-    // The string is rebuilt last, once everything it hangs between has moved.
-    this.group.updateWorldMatrix(true, true);
-    this.updateString(draw);
+    // Bow: follows the animated hand; only the aim tilt and kick come from here.
+    const target = this.bowHolder ?? this.bowPivot;
+    const down = this.isKnockedDown ? 1 : 0;
+    target.rotation.x = -this.pitch * 0.75 * (1 - down);
+    if (this.bowHolder) {
+      this.bowHolder.position.z = -this.recoil * 0.1;
+    } else {
+      this.bowPivot.position.z = BOW_REST.z - this.recoil * 0.12;
+    }
 
     const flashing = nowMs < this.flashUntil;
     if (!this.character || (!flashing && !this.wasFlashing)) {
@@ -302,7 +331,7 @@ export class ArcherRig {
   }
 
   dispose(): void {
+    this.mixer?.stopAllAction();
     this.group.removeFromParent();
-    this.stringLine?.geometry.dispose();
   }
 }

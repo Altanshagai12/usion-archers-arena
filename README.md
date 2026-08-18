@@ -86,3 +86,12 @@ to GitHub Pages.
 The game is registered in the Usion service registry from the Usion monorepo
 (`backend/scripts/seed_archers_arena.py`) — that script holds the registry
 contract only; no game code lives in the platform repo.
+
+## Credits
+
+The archer character is **Medieval** by *dook*, released **CC0** and fetched
+from [Poly Pizza](https://poly.pizza/m/y9KWOVG21R). It ships with the authored
+clips the game plays: idle, aiming, shoot, hit and death.
+
+Everything else (bow, arrow, quiver, trees, rocks, walls, towers, columns,
+banners, crates) was generated with Higgsfield and lives in `assets_raw/`.
