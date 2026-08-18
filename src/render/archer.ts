@@ -74,6 +74,14 @@ export class ArcherRig {
   private loosing = false;
 
   private bowHand: THREE.Bone | null = null;
+  /** The hand that pulls; the bowstring is anchored to it. */
+  private stringHand: THREE.Bone | null = null;
+
+  private bow: THREE.Object3D | null = null;
+  private stringLine: THREE.Line | null = null;
+  /** Limb tips in the bow's OWN frame, measured before it is parented. */
+  private readonly limbTop = new THREE.Vector3();
+  private readonly limbBottom = new THREE.Vector3();
 
   private drawAmount = 0;
   private pitch = 0.2;
@@ -173,6 +181,8 @@ export class ArcherRig {
    * supporting the bow.
    */
   private attachBow(character: THREE.Object3D, bow: THREE.Object3D): void {
+    this.bow = bow;
+    this.measureLimbs(bow);
     this.bowPivot.add(bow);
 
     if (this.drawAction && this.mixer) {
@@ -187,13 +197,90 @@ export class ArcherRig {
     if (left && right) {
       const leftZ = this.facingGroup.worldToLocal(left.getWorldPosition(this.scratch)).z;
       const rightZ = this.facingGroup.worldToLocal(right.getWorldPosition(this.scratchB)).z;
-      this.bowHand = leftZ >= rightZ ? left : right;
+      const leftIsBowHand = leftZ >= rightZ;
+      this.bowHand = leftIsBowHand ? left : right;
+      this.stringHand = leftIsBowHand ? right : left;
     } else {
       this.bowHand = left ?? right;
     }
 
+    this.buildString();
+
     if (this.drawAction) this.drawAction.time = 0;
     this.mixer?.update(0);
+  }
+
+  private measureLimbs(bow: THREE.Object3D): void {
+    // Measured BEFORE parenting: Box3.setFromObject returns world bounds, so
+    // afterwards these would be the bow's position in the scene instead.
+    bow.updateWorldMatrix(false, true);
+    const box = new THREE.Box3().setFromObject(bow);
+    const size = new THREE.Vector3();
+    const centre = new THREE.Vector3();
+    box.getSize(size);
+    box.getCenter(centre);
+    this.limbTop.set(centre.x, centre.y + size.y * 0.45, centre.z);
+    this.limbBottom.set(centre.x, centre.y - size.y * 0.45, centre.z);
+  }
+
+  /**
+   * A bowstring that actually bends.
+   *
+   * The string modelled into the bow mesh is a straight, rigid piece of
+   * geometry — it cannot follow a draw no matter how well the archer is
+   * animated. This one runs limb tip → drawing hand → limb tip, and since the
+   * hand is genuinely animated by the Mixamo clip, the string bends into a real
+   * V as the shot is pulled and snaps flat on release.
+   */
+  private buildString(): void {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
+    const material = new THREE.LineBasicMaterial({ color: 0xfaf6e8 });
+    const line = new THREE.Line(geometry, material);
+    line.frustumCulled = false;
+    line.renderOrder = 6;
+    this.stringLine = line;
+    this.group.add(line);
+  }
+
+  /**
+   * Rebuild the bowstring.
+   *
+   * The line lives under `group`, so each point is converted out of world
+   * space before it is written — writing world coordinates into a child
+   * applies the parent transform twice and throws the string across the scene.
+   */
+  private updateString(): void {
+    const line = this.stringLine;
+    const bow = this.bow;
+    if (!line || !bow) return;
+
+    if (this.phase !== 'ready') {
+      line.visible = false;
+      return;
+    }
+
+    const positions = line.geometry.getAttribute('position') as THREE.BufferAttribute;
+    bow.updateWorldMatrix(true, false);
+
+    this.scratch.copy(this.limbTop).applyMatrix4(bow.matrixWorld);
+    this.group.worldToLocal(this.scratch);
+    positions.setXYZ(0, this.scratch.x, this.scratch.y, this.scratch.z);
+
+    // Nock: the drawing hand itself when there is one, otherwise the bow's
+    // middle so the string at least stays strung.
+    if (this.stringHand) this.stringHand.getWorldPosition(this.scratchB);
+    else this.scratchB.set(0, 0, 0).applyMatrix4(bow.matrixWorld);
+    this.group.worldToLocal(this.scratchB);
+    positions.setXYZ(1, this.scratchB.x, this.scratchB.y, this.scratchB.z);
+
+    this.scratch.copy(this.limbBottom).applyMatrix4(bow.matrixWorld);
+    this.group.worldToLocal(this.scratch);
+    positions.setXYZ(2, this.scratch.x, this.scratch.y, this.scratch.z);
+
+    positions.needsUpdate = true;
+    line.geometry.computeBoundingSphere();
+    line.visible = true;
   }
 
   /** Strap the quiver to the back so it rides the body, falls included. */
@@ -362,6 +449,10 @@ export class ArcherRig {
     this.bowPivot.rotation.x = -this.pitch * 0.75;
     this.bowPivot.visible = this.phase === 'ready';
 
+    // The string is rebuilt last, once the bow and the hands have moved.
+    this.group.updateWorldMatrix(true, true);
+    this.updateString();
+
     const flashing = nowMs < this.flashUntil;
     if (!this.character || (!flashing && !this.wasFlashing)) {
       this.wasFlashing = flashing;
@@ -382,6 +473,7 @@ export class ArcherRig {
   }
 
   dispose(): void {
+    this.stringLine?.geometry.dispose();
     this.mixer?.stopAllAction();
     this.group.removeFromParent();
   }
