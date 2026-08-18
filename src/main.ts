@@ -49,8 +49,13 @@ const BOT_ID = '__bot__';
 const AIM_BROADCAST_MS = 70;
 /** Real flight times are slow to watch; nudge playback without losing weight. */
 const PLAYBACK_SPEED = 1.25;
-const BOT_THINK_MS = 900;
+/** Beat before the bot starts lining up, so the camera arrives first. */
+const BOT_THINK_MS = 700;
+/** How long the bot spends visibly raising the bow and drawing before it fires. */
+const BOT_AIM_MS = 1500;
 const MIN_SHOT_MS = 300;
+/** A hit knocks the target down; hold the turn until they are back up. */
+const KNOCKDOWN_MS = 1650;
 /** How long to wait for the host's INIT before assuming we are standalone. */
 const INIT_TIMEOUT_MS = 2500;
 
@@ -84,6 +89,10 @@ class Game {
   private vsBot = false;
   private botMemory = createBotMemory();
   private botTimer = 0;
+  /** The bot's committed shot, animated toward before it is actually fired. */
+  private botAim: { shot: ShotInput; startedAt: number; fromPitch: number } | null = null;
+  /** Elevation the opponent is currently showing, for their rig and the camera. */
+  private opponentPitch = 0.25;
 
   private readonly readyStats = new Map<string, ArcherStats>();
   private readySent = false;
@@ -355,7 +364,9 @@ class Game {
     if (message.action_type !== 'aim') return;
     const seat = this.seatOf(message.player_id);
     if (seat === null || seat === this.mySeat) return;
-    this.remoteAim = { seat, pitch: Number(message.action_data?.pitch) || 0 };
+    const pitch = Number(message.action_data?.pitch) || 0;
+    this.remoteAim = { seat, pitch };
+    this.opponentPitch = pitch;
   }
 
   private handleSync(data: any): void {
@@ -407,6 +418,8 @@ class Game {
 
   private resetMatchBookkeeping(): void {
     window.clearTimeout(this.botTimer);
+    this.botAim = null;
+    this.opponentPitch = 0.25;
     this.readyStats.clear();
     this.readySent = false;
     this.state = emptyMatch();
@@ -489,6 +502,33 @@ class Game {
     if (!this.vsBot || this.state.over || this.state.turn !== 1) return;
     const arena = arenaByIndex(this.state.arenaIndex);
     const shot = chooseBotShot(arena, archersFor(this.state), 1, arena.botSkill, this.botMemory);
+    // Firing here would be instant and unreadable — the shot is committed now
+    // but held until the archer has visibly lined it up (see the frame loop).
+    this.botAim = { shot, startedAt: performance.now(), fromPitch: this.opponentPitch };
+  }
+
+  /** Drive the bot's aim animation, and fire once it has finished lining up. */
+  private advanceBotAim(now: number): void {
+    if (!this.botAim) return;
+    if (this.state.over || this.state.turn !== 1) {
+      this.botAim = null;
+      return;
+    }
+
+    const t = Math.min(1, (now - this.botAim.startedAt) / BOT_AIM_MS);
+    const eased = t * t * (3 - 2 * t);
+    this.opponentPitch =
+      this.botAim.fromPitch + (this.botAim.shot.pitch - this.botAim.fromPitch) * eased;
+
+    const rig = this.rigs[1];
+    rig?.setAim(this.opponentPitch);
+    // The draw fills a little ahead of the aim, so the release lands on a
+    // fully drawn bow rather than a still-rising one.
+    rig?.setDraw(Math.min(1, t * 1.2) * this.botAim.shot.power);
+
+    if (t < 1 || this.playback) return;
+    const shot = this.botAim.shot;
+    this.botAim = null;
     this.applyLocalAction('shoot', shot, BOT_ID);
   }
 
@@ -617,7 +657,11 @@ class Game {
         if (this.vsBot && seat === 1) {
           recordBotOutcome(this.botMemory, result.path, archers[0], facingOf(1));
         }
-        this.refreshTurn();
+
+        // Let the knockdown play out before the next turn starts, so nobody
+        // draws a bow while flat on their back.
+        if (zone) window.setTimeout(() => this.refreshTurn(), KNOCKDOWN_MS);
+        else this.refreshTurn();
       },
       Math.max(MIN_SHOT_MS, flightMs),
     );
@@ -725,10 +769,11 @@ class Game {
 
     const dt = this.lastFrameAt ? Math.min(0.1, (now - this.lastFrameAt) / 1000) : 1 / 60;
     this.lastFrameAt = now;
+    this.advanceBotAim(now);
     this.rigs[0]?.update(now, dt);
     this.rigs[1]?.update(now, dt);
 
-    if (this.remoteAim) {
+    if (this.remoteAim && !this.vsBot) {
       this.rigs[this.remoteAim.seat]?.setAim(this.remoteAim.pitch);
       this.rigs[this.remoteAim.seat]?.setDraw(0.7);
     }
@@ -764,9 +809,17 @@ class Game {
         // watched from their shoulder rather than from across the range.
         const seat: Seat = this.state.over ? this.mySeat : this.state.turn;
         const archer = archers[seat];
+        const mine = seat === this.mySeat;
         this.cameraOrigin.set(archer.pos.x, archer.pos.y, archer.pos.z);
-        const pitch = seat === this.mySeat ? this.aim.pitch : (this.remoteAim?.pitch ?? 0.25);
-        view = { kind: 'shoulder', origin: this.cameraOrigin, facing: facingOf(seat), pitch };
+        // Your own turn is played over your shoulder; the opponent's is watched
+        // from in front of them, so you see the bow come up and the draw build.
+        view = {
+          kind: mine ? 'shoulder' : 'front',
+          seat,
+          origin: this.cameraOrigin,
+          facing: facingOf(seat),
+          pitch: mine ? this.aim.pitch : this.opponentPitch,
+        };
         this.sunAnchor.set(archer.pos.x, 0, archer.pos.z + 20 * facingOf(seat));
       }
 
