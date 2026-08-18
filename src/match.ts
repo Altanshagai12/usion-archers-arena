@@ -26,6 +26,17 @@ export interface ResolvedShot {
 export interface MatchState {
   started: boolean;
   arenaIndex: number;
+  /**
+   * Who holds which seat, locked in by the `start` action.
+   *
+   * Seats used to be read from each client's own view of the room roster,
+   * which arrives asynchronously and can still be empty when it is first
+   * looked at. A client that looked too early fell back to seat 0 in silence —
+   * and when both did, both players stood on the same end of the range, saw
+   * the identical view and dialled the identical elevation. The match's own
+   * record cannot drift like that.
+   */
+  players: [string, string] | null;
   stats: [ArcherStats, ArcherStats];
   health: [number, number];
   turn: Seat;
@@ -51,6 +62,7 @@ export function emptyMatch(): MatchState {
   return {
     started: false,
     arenaIndex: 0,
+    players: null,
     stats: [FALLBACK_STATS, FALLBACK_STATS],
     health: [FALLBACK_STATS.maxHealth, FALLBACK_STATS.maxHealth],
     retreat: [0, 0],
@@ -60,6 +72,27 @@ export function emptyMatch(): MatchState {
     lastShot: null,
     appliedSequence: 0,
   };
+}
+
+/** Seat order from a `start` payload: two distinct, non-empty player ids. */
+function sanitisePlayers(raw: any): [string, string] | null {
+  if (!Array.isArray(raw) || raw.length < 2) return null;
+  const first = typeof raw[0] === 'string' ? raw[0] : '';
+  const second = typeof raw[1] === 'string' ? raw[1] : '';
+  if (!first || !second || first === second) return null;
+  return [first, second];
+}
+
+/**
+ * The seat this player holds in a started match, or null when the match has
+ * no seating record — a bot match, or a `start` from a client too old to send
+ * one. Callers fall back to the room roster in that case.
+ */
+export function seatOfPlayer(state: MatchState, playerId: string): Seat | null {
+  if (!state.players) return null;
+  if (state.players[0] === playerId) return 0;
+  if (state.players[1] === playerId) return 1;
+  return null;
 }
 
 function sanitiseStats(raw: any): ArcherStats {
@@ -102,6 +135,7 @@ export function applyAction(
       ...next,
       started: true,
       arenaIndex,
+      players: sanitisePlayers(action.data?.players),
       stats,
       health: [stats[0].maxHealth, stats[1].maxHealth],
       retreat: [0, 0],
@@ -117,7 +151,10 @@ export function applyAction(
   if (action.type === 'shoot') {
     if (!next.started || next.over) return next;
 
-    const seat = seatOf(action.playerId);
+    // The match's own seating first, so a replay is self-consistent: the fold
+    // reads the seats the `start` it just applied established, not whatever
+    // the caller's roster happens to look like right now.
+    const seat = seatOfPlayer(next, action.playerId) ?? seatOf(action.playerId);
     if (seat === null || seat !== next.turn) return next;
 
     const input: ShotInput = {

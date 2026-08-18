@@ -18,7 +18,7 @@ import { arenaByIndex, highestUnlockedArena } from './arenas';
 import { chooseBotShot, createBotMemory, recordBotOutcome } from './bot';
 import { setLanguage, t } from './i18n';
 import { AimController } from './input';
-import { applyAction, archersFor, emptyMatch, replay } from './match';
+import { applyAction, archersFor, emptyMatch, replay, seatOfPlayer } from './match';
 import type { MatchAction, MatchState, Seat } from './match';
 import { Net } from './net';
 import {
@@ -89,7 +89,16 @@ class Game {
   private state: MatchState = emptyMatch();
   private phase: Phase = 'boot';
 
-  private mySeat: Seat = 0;
+  /**
+   * Which end of the range we stand on.
+   *
+   * Derived, never stored: a stored copy was set from the room roster the
+   * moment it happened to be read, and a client that read it too early sat
+   * itself at seat 0 without anything noticing.
+   */
+  private get mySeat(): Seat {
+    return this.seatOf(this.net.myId()) ?? 0;
+  }
   private vsBot = false;
   private botMemory = createBotMemory();
   private botTimer = 0;
@@ -311,14 +320,16 @@ class Game {
       if (playerId === BOT_ID) return 1;
       return playerId === this.net.myId() ? 0 : null;
     }
+    // The match's own seating wins over the roster, which arrives late and
+    // can still be empty when the first frame asks.
+    const seated = seatOfPlayer(this.state, playerId);
+    if (seated !== null) return seated;
     const index = this.net.roster.indexOf(playerId);
     return index === 0 || index === 1 ? (index as Seat) : null;
   }
 
   private handleRoster(roster: string[]): void {
     if (this.vsBot) return;
-    const index = roster.indexOf(this.net.myId());
-    this.mySeat = index === 1 ? 1 : 0;
 
     if (roster.length < 2) {
       this.phase = 'waiting';
@@ -374,17 +385,18 @@ class Game {
   private maybeStartMatch(): void {
     if (this.state.started || this.vsBot) return;
 
-    const stats = startPlan(
+    const plan = startPlan(
       this.net.roster,
       this.net.myId(),
       statsFor(this.profile.upgrades),
       this.readyStats,
     );
-    if (!stats) return;
+    if (!plan) return;
 
     void this.net.sendAction('start', {
       arenaIndex: highestUnlockedArena(this.profile.rating),
-      stats,
+      players: plan.players,
+      stats: plan.stats,
     });
   }
 
@@ -463,7 +475,6 @@ class Game {
 
   private async startBotMatch(): Promise<void> {
     this.vsBot = true;
-    this.mySeat = 0;
     this.botMemory = createBotMemory();
     this.resetMatchBookkeeping();
 
@@ -636,7 +647,10 @@ class Game {
         // here poses bones by hand.
         model: 'archer_mx' as ModelKey,
         facing: facingOf(seat),
-        tint: seat === 0 ? 0xd6503f : 0x3f6ed6,
+        // Matches the health bars — yours is blue, theirs is red — so each
+        // player can tell at a glance which archer is which. Both are seat
+        // 0 on their own screen half the time, so this cannot key off seat.
+        tint: seat === this.mySeat ? 0x56b7f0 : 0xe0574f,
       };
       const rig = new ArcherRig(options);
       await rig.load(options);

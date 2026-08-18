@@ -16,8 +16,21 @@
 
 import type { ArcherStats } from './sim';
 
+export interface StartPlan {
+  /**
+   * Seat order for the match. Seat 0 shoots toward +z from the near mound;
+   * seat 1 shoots back from the far one, which stands at a different height.
+   *
+   * This travels in the `start` action so every client — including one that
+   * rejoins later — seats the players from one authoritative record instead of
+   * from its own asynchronous view of the room.
+   */
+  players: [string, string];
+  stats: [ArcherStats, ArcherStats];
+}
+
 /**
- * The stats pair to start with, or null if this client must not start yet.
+ * The match to start, or null if this client must not start one yet.
  *
  * `announced` holds the stats each player has broadcast, keyed by player id;
  * `mine` is used for our own seat whether or not our announcement came back.
@@ -27,7 +40,7 @@ export function startPlan(
   myId: string,
   mine: ArcherStats,
   announced: ReadonlyMap<string, ArcherStats>,
-): [ArcherStats, ArcherStats] | null {
+): StartPlan | null {
   // Exactly one client locks the match, or two `start` actions race.
   if (roster.length < 2 || roster[0] !== myId) return null;
 
@@ -38,5 +51,5 @@ export function startPlan(
   const second = statsOf(roster[1]);
   if (!first || !second) return null;
 
-  return [first, second];
+  return { players: [roster[0], roster[1]], stats: [first, second] };
 }

@@ -14,7 +14,7 @@ describe('startPlan', () => {
     // The regression: an embedded action has no acknowledgement, so our own
     // `ready` may never come back. That must not hold up the match.
     const plan = startPlan(['me', 'you'], 'me', mine, announced([['you', theirs]]));
-    expect(plan).toEqual([mine, theirs]);
+    expect(plan).toEqual({ players: ['me', 'you'], stats: [mine, theirs] });
   });
 
   it('waits while the peer has not announced', () => {
@@ -27,7 +27,10 @@ describe('startPlan', () => {
     const roster = ['you', 'me'];
     const heard = announced([['you', theirs]]);
     expect(startPlan(roster, 'me', mine, heard)).toBeNull();
-    expect(startPlan(roster, 'you', theirs, announced([['me', mine]]))).toEqual([theirs, mine]);
+    expect(startPlan(roster, 'you', theirs, announced([['me', mine]]))).toEqual({
+      players: ['you', 'me'],
+      stats: [theirs, mine],
+    });
   });
 
   it('waits for a full room', () => {
@@ -48,7 +51,7 @@ describe('startPlan', () => {
         ['you', theirs],
       ]),
     );
-    expect(plan).toEqual([mine, theirs]);
+    expect(plan).toEqual({ players: ['me', 'you'], stats: [mine, theirs] });
   });
 
   it('is repeatable, so a nudge can keep asking', () => {

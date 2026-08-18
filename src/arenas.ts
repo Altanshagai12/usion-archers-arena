@@ -104,11 +104,16 @@ export const ARENAS: ArenaDefinition[] = [
     wind: 0,
     drag: 0.05,
     range: 30,
-    elevation: [1.1, 1.1],
+    // Never level: the whole point of the duel is that the two archers stand
+    // at different heights, so one shoots down onto the other and needs a
+    // different elevation to do it. A flat opening arena hid the mechanic
+    // from every new player, since it is the only one unlocked at rating 0.
+    elevation: [1.1, 3.4],
     obstacles: [],
     mounds: [
       { at: { x: 0, y: 0, z: 0 }, radius: 3.6, height: 1.1 },
-      { at: { x: 0, y: 0, z: 30 }, radius: 3.6, height: 1.1 },
+      // Wide enough that a knocked-back archer stays on top of it.
+      { at: { x: 0, y: 0, z: 30 }, radius: 4.4, height: 3.4 },
     ],
     ridges: [
       [-34, 26, 20],
@@ -192,11 +197,13 @@ export const ARENAS: ArenaDefinition[] = [
     wind: 2.2,
     drag: 0.052,
     range: 50,
-    elevation: [2.4, 2.4],
+    // The rampart is the high side here, so this is the arena where YOU shoot
+    // down and the opponent shoots up — the mirror of greenwood.
+    elevation: [4.6, 1.4],
     obstacles: baleObstacles(RAMPART_BALES),
     mounds: [
-      { at: { x: 0, y: 0, z: 0 }, radius: 3.8, height: 2.4 },
-      { at: { x: 0, y: 0, z: 50 }, radius: 3.8, height: 2.4 },
+      { at: { x: 0, y: 0, z: 0 }, radius: 4.6, height: 4.6 },
+      { at: { x: 0, y: 0, z: 50 }, radius: 3.8, height: 1.4 },
     ],
     ridges: [
       [-26, 33, 24],
