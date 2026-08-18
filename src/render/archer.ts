@@ -1,20 +1,22 @@
 /**
  * One archer.
  *
- * The bow is parented to a hand bone of the character mesh, so it can never
- * drift off into the air. Which hand is measured from the rig rather than
- * assumed: whichever hand sits further down-range in the bind pose holds it.
+ * The character mesh is used exactly as generated, and no bone is ever touched.
+ * That is the conclusion of three attempts at articulating it:
  *
- * NOTHING here rotates a bone. Two attempts at that both wrecked the figure —
- * full-arm IK scrambled it outright, and even a single bounded rotation on an
- * upper arm dragged the head into a spike, because this auto-rigged mesh
- * weights head vertices onto arm bones. The silhouette is the one thing a
- * player reads, so the skeleton is treated as read-only and every animation
- * lives on groups this code owns:
+ *   - Full-arm IK against the auto-rigged skeleton scrambled the figure.
+ *   - A single bounded rotation on an upper arm dragged the head into a spike,
+ *     because the auto-rigger weights head vertices onto arm bones.
+ *   - The rigged mesh itself is re-posed into a T-pose by the rigger, so it
+ *     stands like a mannequin with both arms straight out. The un-rigged
+ *     meshes are the ones that actually stand like archers.
  *
- *   aim      the bow tilts onto the aim line inside the hand
- *   draw     a procedural bowstring bends back into a deepening V, the torso
- *            leans in, and the bow eases out to full extension
+ * So the skeleton is not used at all. Every animation lives on groups this code
+ * owns, where it cannot deform the silhouette — the one thing a player reads:
+ *
+ *   aim      the bow tilts onto the aim line
+ *   draw     the bow rides out from a low carry to full extension, a procedural
+ *            bowstring bends back into a deepening V, and the torso leans in
  *   release  the bow kicks back toward the body, then settles
  *   knocked  the archer falls backwards, lies a beat, then gets up in two
  *            pushes — onto a knee, gather, onto the feet
@@ -28,8 +30,13 @@ import * as THREE from 'three';
 import { instantiate } from './models';
 import type { ModelKey } from './models';
 
-/** Fallback bow position for a mesh with no skeleton to hang it on. */
-const LOOSE_BOW_HAND = new THREE.Vector3(0.24, 1.26, 0.34);
+/**
+ * Bow carry position, relative to the archer's feet: out to the bow side and
+ * clear in front of the chest, so it never buries itself in the torso.
+ */
+const BOW_REST = new THREE.Vector3(0.3, 1.22, 0.52);
+/** Where the bow sits at full draw — pushed out and lifted. */
+const BOW_DRAWN = new THREE.Vector3(0.33, 1.38, 0.66);
 
 /** How far the nock travels back at full draw, in metres. */
 const DRAW_TRAVEL = 0.34;
@@ -47,21 +54,17 @@ export interface ArcherVisualOptions {
   model: ModelKey;
   /** +1 shoots toward +z, -1 toward -z. */
   facing: 1 | -1;
-  /** Blended into the character's base colour to tell the two sides apart. */
-  tint?: number;
 }
 
 export class ArcherRig {
   readonly group = new THREE.Group();
 
   private readonly facingGroup = new THREE.Group();
-  private readonly loosePivot = new THREE.Group();
+  private readonly bowPivot = new THREE.Group();
   private readonly bodyPivot = new THREE.Group();
 
   private character: THREE.Object3D | null = null;
   private bow: THREE.Object3D | null = null;
-  /** Wrapper inside the hand bone; carries the aim tilt and the recoil kick. */
-  private bowHolder: THREE.Group | null = null;
 
   private stringLine: THREE.Line | null = null;
   /** Limb tips in the bow's OWN frame, measured before it is parented. */
@@ -85,8 +88,8 @@ export class ArcherRig {
     this.group.add(this.facingGroup);
     this.facingGroup.add(this.bodyPivot);
 
-    this.loosePivot.position.copy(LOOSE_BOW_HAND);
-    this.facingGroup.add(this.loosePivot);
+    this.bowPivot.position.copy(BOW_REST);
+    this.facingGroup.add(this.bowPivot);
   }
 
   async load(options: ArcherVisualOptions): Promise<void> {
@@ -100,13 +103,12 @@ export class ArcherRig {
     this.character = character;
     this.bow = bow;
     this.bodyPivot.add(character);
-    if (options.tint !== undefined) this.applyTint(character, options.tint);
 
-    // Measure the bow BEFORE parenting it. Box3.setFromObject returns world
+    // Measure the bow BEFORE parenting it. Box3.setFromObject returns WORLD
     // bounds, so measuring afterwards yields the bow's position in the scene
     // and the string ends up drawn as a streak across the sky.
     this.measureLimbs(bow);
-    this.attachBow(character, bow);
+    this.bowPivot.add(bow);
     this.buildString();
 
     quiver.position.set(-0.22, 0.95, -0.16);
@@ -118,48 +120,12 @@ export class ArcherRig {
     bow.updateWorldMatrix(false, true);
     const box = new THREE.Box3().setFromObject(bow);
     const size = new THREE.Vector3();
-    box.getSize(size);
     const centre = new THREE.Vector3();
+    box.getSize(size);
     box.getCenter(centre);
     // The bow is normalised upright and centred, so the tips sit on its own y.
     this.limbTop.set(centre.x, centre.y + size.y * 0.45, centre.z);
     this.limbBottom.set(centre.x, centre.y - size.y * 0.45, centre.z);
-  }
-
-  private findBone(root: THREE.Object3D, name: string): THREE.Bone | null {
-    let found: THREE.Bone | null = null;
-    root.traverse((child) => {
-      if (!found && (child as THREE.Bone).isBone && child.name === name) {
-        found = child as THREE.Bone;
-      }
-    });
-    return found;
-  }
-
-  /** Put the bow in whichever hand the rig holds further down-range. */
-  private attachBow(character: THREE.Object3D, bow: THREE.Object3D): void {
-    const left = this.findBone(character, 'LeftHand');
-    const right = this.findBone(character, 'RightHand');
-
-    if (!left || !right) {
-      this.loosePivot.add(bow);
-      return;
-    }
-
-    character.updateWorldMatrix(true, true);
-    const leftZ = this.facingGroup.worldToLocal(left.getWorldPosition(this.scratch)).z;
-    const rightZ = this.facingGroup.worldToLocal(right.getWorldPosition(this.scratchB)).z;
-    const bowHand = leftZ >= rightZ ? left : right;
-
-    const holder = new THREE.Group();
-    // The hand bone lives inside the scaled rig; undo that on the way in so
-    // the bow keeps the size it was normalised to.
-    const scale = bowHand.getWorldScale(this.scratch).x;
-    holder.scale.setScalar(scale > 0 ? 1 / scale : 1);
-    holder.add(bow);
-    bowHand.add(holder);
-    this.bowHolder = holder;
-    this.loosePivot.visible = false;
   }
 
   /**
@@ -180,21 +146,6 @@ export class ArcherRig {
     line.visible = false;
     this.stringLine = line;
     this.group.add(line);
-  }
-
-  private applyTint(root: THREE.Object3D, tint: number): void {
-    const colour = new THREE.Color(tint);
-    root.traverse((child) => {
-      const mesh = child as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      const cloned = list.map((material) => {
-        const copy = (material as THREE.MeshStandardMaterial).clone();
-        copy.color.lerp(colour, 0.28);
-        return copy;
-      });
-      mesh.material = Array.isArray(mesh.material) ? cloned : cloned[0];
-    });
   }
 
   /** Elevation in radians — the number the gauge shows. Aiming is Y only. */
@@ -254,8 +205,8 @@ export class ArcherRig {
    *
    * The line lives under `group`, so every point must be converted out of
    * world space before it is written — writing world coordinates into a child
-   * applies the parent transform a second time and throws the string off
-   * across the scene.
+   * applies the parent transform a second time and throws the string across
+   * the scene.
    */
   private updateString(draw: number): void {
     const line = this.stringLine;
@@ -316,12 +267,16 @@ export class ArcherRig {
     const settled = (1 - draw * 0.8) * (1 - down);
     this.bodyPivot.rotation.x = -draw * 0.12 + Math.sin(this.breathePhase) * 0.012 * settled;
 
-    // Bow: tilts onto the aim line inside the hand, eases out to full
-    // extension as the shot is drawn, and kicks back on release.
-    const target = this.bowHolder ?? this.loosePivot;
-    target.rotation.x = -this.pitch * (0.4 + 0.6 * draw) * (1 - down);
-    const baseZ = this.bowHolder ? 0 : LOOSE_BOW_HAND.z;
-    target.position.z = baseZ + draw * 0.06 - this.recoil * 0.12;
+    // Bow: rides from the low carry out to full extension, drops with the body
+    // when knocked over, and kicks back toward the chest on release.
+    this.bowPivot.position.set(
+      THREE.MathUtils.lerp(BOW_REST.x, BOW_DRAWN.x, draw),
+      THREE.MathUtils.lerp(BOW_REST.y, BOW_DRAWN.y, draw) - down * 0.35,
+      THREE.MathUtils.lerp(BOW_REST.z, BOW_DRAWN.z, draw) - this.recoil * 0.13,
+    );
+    // Held closer to level at rest, swung fully onto the aim line as the shot
+    // is drawn — so raising the elevation is visible on the bow itself.
+    this.bowPivot.rotation.x = -this.pitch * (0.4 + 0.6 * draw) * (1 - down);
 
     // The string is rebuilt last, once everything it hangs between has moved.
     this.group.updateWorldMatrix(true, true);

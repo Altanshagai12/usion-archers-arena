@@ -242,7 +242,7 @@ class Game {
         onCancel: () => this.cancelAim(),
       });
 
-      await preload(['archer_rigged', 'archer_a', 'archer_b', 'bow', 'arrow', 'quiver']);
+      await preload(['archer_a', 'archer_b', 'bow', 'arrow', 'quiver']);
       requestAnimationFrame(this.frame);
     } catch (error) {
       // Losing the renderer must not take the menu down with it.
@@ -550,12 +550,12 @@ class Game {
     const archers = archersFor(this.state);
     for (const seat of [0, 1] as Seat[]) {
       const options = {
-        // Both archers are rigged now that the camera travels to whoever is
-        // shooting — the opponent is watched up close too. One mesh serves
-        // both, tinted apart, because only this one auto-rigs cleanly.
-        model: 'archer_rigged' as ModelKey,
+        // The un-rigged meshes, because they are the ones that stand like
+        // archers. The auto-rigger re-poses its output into a T-pose, so the
+        // rigged variant is a mannequin with both arms straight out — worse
+        // than having no skeleton at all.
+        model: (seat === 0 ? 'archer_a' : 'archer_b') as ModelKey,
         facing: facingOf(seat),
-        tint: seat === 0 ? 0xd6503f : 0x3f6ed6,
       };
       const rig = new ArcherRig(options);
       await rig.load(options);
