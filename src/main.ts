@@ -181,7 +181,15 @@ class Game {
     document.title = t('app.title');
     this.menu.setInviteAvailable(this.hosted);
 
-    const launchRoom = this.hosted ? (roomId ?? this.net.launchParams().roomId ?? null) : null;
+    // Branch on the mode the HOST declares, never on whether a roomId exists:
+    // a solo launch from Explore can still carry an auto-created room, and
+    // joining it stranded the player on 'waiting for opponent' with no way to
+    // reach the menu or the bot. A solo launch that is later promoted arrives
+    // through onRoomAssigned instead.
+    const launchRoom =
+      this.hosted && this.net.isMultiplayer()
+        ? (roomId ?? this.net.launchParams().roomId ?? null)
+        : null;
 
     // Join and boot the renderer concurrently — never gate the join on a frame.
     const joining = launchRoom ? this.joinRoom(launchRoom) : Promise.resolve();
@@ -243,7 +251,16 @@ class Game {
     this.hud.setVisible(true);
     this.hud.setTurn(false, true);
     const joined = await this.net.connectAndJoin(roomId);
-    if (joined) this.handleRoster(this.net.roster);
+    if (joined) {
+      this.handleRoster(this.net.roster);
+      return;
+    }
+    // A failed join used to leave the player on 'waiting for opponent' forever
+    // with nothing to press. Fall back to the menu so the bot is still there.
+    console.warn('[archers-arena] could not join', roomId);
+    this.vsBot = false;
+    this.phase = 'menu';
+    this.showMenu();
   }
 
   private seatOf(playerId: string): Seat | null {

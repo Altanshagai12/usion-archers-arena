@@ -57,6 +57,20 @@ export class Net {
     return this.sdk?.user.getName() ?? 'You';
   }
 
+  /**
+   * Whether the host opened us from a game invite. The host declares this; a
+   * solo launch from Explore can still carry an auto-created roomId, so
+   * inferring multiplayer from roomId strands the player on 'waiting'.
+   */
+  isMultiplayer(): boolean {
+    try {
+      if (this.sdk?.game?.isMultiplayer?.()) return true;
+    } catch {
+      // Older SDK without the helper — fall through to the launch param.
+    }
+    return this.launchParams().mode === 'multiplayer';
+  }
+
   launchParams(): LaunchParams {
     try {
       return this.sdk?.getLaunchParams() ?? {};
