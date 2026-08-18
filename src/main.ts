@@ -841,6 +841,19 @@ class Game {
 
     if (this.state.started) {
       const archers = archersFor(this.state);
+
+      // Ease each archer toward their mark. A hit moves that mark back, and
+      // easing makes it read as being driven back rather than teleporting.
+      const settle = 1 - Math.exp(-6 * dt);
+      for (const seat of [0, 1] as Seat[]) {
+        const rig = this.rigs[seat];
+        if (!rig) continue;
+        const mark = archers[seat].pos;
+        rig.group.position.x += (mark.x - rig.group.position.x) * settle;
+        rig.group.position.y += (mark.y - rig.group.position.y) * settle;
+        rig.group.position.z += (mark.z - rig.group.position.z) * settle;
+      }
+
       let view: ViewRequest;
 
       if (followingArrow) {
@@ -852,7 +865,11 @@ class Game {
         const seat: Seat = this.state.over ? this.mySeat : this.state.turn;
         const archer = archers[seat];
         const mine = seat === this.mySeat;
-        this.cameraOrigin.set(archer.pos.x, archer.pos.y, archer.pos.z);
+        const rig = this.rigs[seat];
+        // Track the rig, not the mark, so the camera does not run ahead of an
+        // archer who is still being driven back.
+        if (rig) this.cameraOrigin.copy(rig.group.position);
+        else this.cameraOrigin.set(archer.pos.x, archer.pos.y, archer.pos.z);
         // Your own turn is played over your shoulder; the opponent's is watched
         // from in front of them, so you see the bow come up and the draw build.
         view = {

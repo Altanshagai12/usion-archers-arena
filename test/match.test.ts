@@ -4,7 +4,7 @@ import { arenaByIndex } from '../src/arenas';
 import { chooseBotShot, createBotMemory } from '../src/bot';
 import { applyAction, archersFor, emptyMatch, replay } from '../src/match';
 import type { MatchAction, MatchState, Seat } from '../src/match';
-import { MAX_PITCH, simulateShot } from '../src/sim';
+import { MAX_KNOCKBACK, MAX_PITCH, simulateShot } from '../src/sim';
 import type { ArcherStats } from '../src/sim';
 
 const P0 = 'player-0';
@@ -130,6 +130,39 @@ describe('match reducer', () => {
     expect(replay([...log].reverse(), seatOf)).toEqual(live);
   });
 
+  it('drives the target back on a hit, so one elevation cannot be repeated', () => {
+    let state = started();
+    const before = archersFor(state);
+    const shot = killerShot(state, 1);
+    state = act(state, P1, 'shoot', shot);
+
+    expect(state.retreat[0]).toBeGreaterThan(0);
+    const after = archersFor(state);
+    // Seat 0 is driven away from seat 1, so the gap widens.
+    expect(after[0].pos.z).toBeLessThan(before[0].pos.z);
+    const gap = (a: ReturnType<typeof archersFor>): number => a[1].pos.z - a[0].pos.z;
+    expect(gap(after)).toBeGreaterThan(gap(before));
+
+    // And that exact shot no longer lands, which is the whole point.
+    const arena = arenaByIndex(state.arenaIndex);
+    expect(simulateShot(arena, archersFor(state), 1, shot).hit?.zone).not.toBe('body');
+  });
+
+  it('caps the retreat so nobody is walked off their mound', () => {
+    let state = started();
+    for (let i = 0; i < 30 && !state.over; i += 1) {
+      const seat = state.turn;
+      let shot;
+      try {
+        shot = killerShot(state, seat);
+      } catch {
+        break; // nothing lands any more — the retreat has done its job
+      }
+      state = act(state, seat === 0 ? P0 : P1, 'shoot', shot);
+    }
+    expect(state.retreat[0]).toBeLessThanOrEqual(MAX_KNOCKBACK);
+    expect(state.retreat[1]).toBeLessThanOrEqual(MAX_KNOCKBACK);
+  });
   it('treats a forfeit as a win for the other seat', () => {
     const state = act(started(), P1, 'forfeit', {});
     expect(state.over).toBe(true);

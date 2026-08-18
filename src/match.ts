@@ -8,7 +8,7 @@
  */
 
 import { arenaByIndex } from './arenas';
-import { archersOf, simulateShot } from './sim';
+import { KNOCKBACK, MAX_KNOCKBACK, archersOf, simulateShot } from './sim';
 import type { ArcherState, ArcherStats, HitZone, ShotInput } from './sim';
 
 export type Seat = 0 | 1;
@@ -29,6 +29,8 @@ export interface MatchState {
   stats: [ArcherStats, ArcherStats];
   health: [number, number];
   turn: Seat;
+  /** How far each archer has been driven back, in metres. */
+  retreat: [number, number];
   over: boolean;
   winner: Seat | null;
   lastShot: ResolvedShot | null;
@@ -51,6 +53,7 @@ export function emptyMatch(): MatchState {
     arenaIndex: 0,
     stats: [FALLBACK_STATS, FALLBACK_STATS],
     health: [FALLBACK_STATS.maxHealth, FALLBACK_STATS.maxHealth],
+    retreat: [0, 0],
     turn: 0,
     over: false,
     winner: null,
@@ -74,7 +77,7 @@ function sanitiseStats(raw: any): ArcherStats {
 
 /** Live archer states derived from the match — positions come from the arena. */
 export function archersFor(state: MatchState): [ArcherState, ArcherState] {
-  return archersOf(arenaByIndex(state.arenaIndex), state.stats, state.health);
+  return archersOf(arenaByIndex(state.arenaIndex), state.stats, state.health, state.retreat);
 }
 
 /**
@@ -101,6 +104,7 @@ export function applyAction(
       arenaIndex,
       stats,
       health: [stats[0].maxHealth, stats[1].maxHealth],
+      retreat: [0, 0],
       // The player who did NOT set up the match shoots first — a small
       // courtesy that also stops the host from having a first-strike edge.
       turn: 1,
@@ -124,6 +128,7 @@ export function applyAction(
     const result = simulateShot(arena, archersFor(next), seat, input);
 
     const health: [number, number] = [next.health[0], next.health[1]];
+    const retreat: [number, number] = [next.retreat[0], next.retreat[1]];
     let zone: HitZone | null = null;
     let damage = 0;
 
@@ -132,6 +137,8 @@ export function applyAction(
       damage = result.hit.damage;
       const target = result.hit.target;
       health[target] = Math.max(0, health[target] - damage);
+      // Drive the target back so the same elevation cannot simply be repeated.
+      retreat[target] = Math.min(MAX_KNOCKBACK, retreat[target] + KNOCKBACK[zone]);
     }
 
     const loser: Seat | null = health[0] <= 0 ? 0 : health[1] <= 0 ? 1 : null;
@@ -139,6 +146,7 @@ export function applyAction(
     return {
       ...next,
       health,
+      retreat,
       turn: seat === 0 ? 1 : 0,
       over: loser !== null,
       winner: loser === null ? null : loser === 0 ? 1 : 0,

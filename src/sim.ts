@@ -198,15 +198,47 @@ function damageFor(zone: HitZone, stats: ArcherStats): number {
   return Math.round(stats.baseDamage * LIMB_MULTIPLIER);
 }
 
-/** Build the two archer states an arena implies. Both stand on x = 0. */
+/**
+ * How far a hit drives the target back down the lane, by where it landed.
+ *
+ * A fixed pair of positions lets a player find one elevation and then repeat it
+ * forever. Every hit moving the target opens the range a little, so the next
+ * shot has to be re-judged.
+ */
+export const KNOCKBACK: Record<HitZone, number> = { head: 0.8, body: 0.55, limb: 0.35 };
+
+/**
+ * Total retreat allowed, in metres.
+ *
+ * Capped so an archer cannot be walked off the back of the mound they are
+ * standing on — the mounds are 3.2 m or more in radius.
+ */
+export const MAX_KNOCKBACK = 2.5;
+
+/**
+ * Build the two archer states an arena implies. Both stand on x = 0.
+ *
+ * `retreat` is how far each has been driven back from their starting mark; it
+ * always widens the gap, never narrows it.
+ */
 export function archersOf(
   arena: ArenaSpec,
   stats: [ArcherStats, ArcherStats],
   health: [number, number],
+  retreat: [number, number] = [0, 0],
 ): [ArcherState, ArcherState] {
+  const back = (value: number): number => Math.min(MAX_KNOCKBACK, Math.max(0, value));
   return [
-    { pos: { x: 0, y: arena.elevation[0], z: 0 }, health: health[0], stats: stats[0] },
-    { pos: { x: 0, y: arena.elevation[1], z: arena.range }, health: health[1], stats: stats[1] },
+    {
+      pos: { x: 0, y: arena.elevation[0], z: -back(retreat[0]) },
+      health: health[0],
+      stats: stats[0],
+    },
+    {
+      pos: { x: 0, y: arena.elevation[1], z: arena.range + back(retreat[1]) },
+      health: health[1],
+      stats: stats[1],
+    },
   ];
 }
 
