@@ -54,8 +54,9 @@ const BOT_THINK_MS = 700;
 /** How long the bot spends visibly raising the bow and drawing before it fires. */
 const BOT_AIM_MS = 1500;
 const MIN_SHOT_MS = 300;
-/** A hit knocks the target down; hold the turn until they are back up. */
-const KNOCKDOWN_MS = 1650;
+/** A hit knocks the target down; the turn waits for them to get back up.
+ *  This is only the safety net if a rig never reports itself upright. */
+const KNOCKDOWN_TIMEOUT = 6;
 /** How long to wait for the host's INIT before assuming we are standalone. */
 const INIT_TIMEOUT_MS = 2500;
 
@@ -113,6 +114,8 @@ class Game {
   private readonly arrowAt = new THREE.Vector3();
   private readonly arrowHeading = new THREE.Vector3();
   private lastFrameAt = 0;
+  /** Turn held until this seat has finished being knocked down. */
+  private turnAfterKnockdown: { seat: Seat; waited: number } | null = null;
 
   constructor() {
     this.net = new Net({
@@ -428,6 +431,7 @@ class Game {
     this.resultReported = false;
     this.playback = null;
     this.remoteAim = null;
+    this.turnAfterKnockdown = null;
     this.aim = { pitch: 0.25, power: 0.5 };
     this.aimController?.resetPitch(0.25);
     this.arenaView.hideArrow();
@@ -505,6 +509,20 @@ class Game {
     // Firing here would be instant and unreadable — the shot is committed now
     // but held until the archer has visibly lined it up (see the frame loop).
     this.botAim = { shot, startedAt: performance.now(), fromPitch: this.opponentPitch };
+  }
+
+  /** Hand the turn over once the archer who was hit is back on their feet. */
+  private advanceKnockdownHold(dt: number): void {
+    const pending = this.turnAfterKnockdown;
+    if (!pending) return;
+
+    pending.waited += dt;
+    const rig = this.rigs[pending.seat];
+    const stillDown = rig?.isKnockedDown ?? false;
+    if (stillDown && pending.waited < KNOCKDOWN_TIMEOUT) return;
+
+    this.turnAfterKnockdown = null;
+    this.refreshTurn();
   }
 
   /** Drive the bot's aim animation, and fire once it has finished lining up. */
@@ -666,9 +684,11 @@ class Game {
           recordBotOutcome(this.botMemory, result.path, archers[0], facingOf(1));
         }
 
-        // Let the knockdown play out before the next turn starts, so nobody
-        // draws a bow while flat on their back.
-        if (zone) window.setTimeout(() => this.refreshTurn(), KNOCKDOWN_MS);
+        // Wait for the knockdown to actually finish rather than guessing at a
+        // duration. The fall, the beat on the ground and the rise all come from
+        // clip lengths, so a fixed delay handed the turn back while the archer
+        // was still flat — and both sides could shoot from the floor.
+        if (zone) this.turnAfterKnockdown = { seat: seat === 0 ? 1 : 0, waited: 0 };
         else this.refreshTurn();
       },
       Math.max(MIN_SHOT_MS, flightMs),
@@ -778,6 +798,7 @@ class Game {
     const dt = this.lastFrameAt ? Math.min(0.1, (now - this.lastFrameAt) / 1000) : 1 / 60;
     this.lastFrameAt = now;
     this.advanceBotAim(now);
+    this.advanceKnockdownHold(dt);
     this.rigs[0]?.update(now, dt);
     this.rigs[1]?.update(now, dt);
 
