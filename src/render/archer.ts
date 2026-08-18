@@ -73,7 +73,6 @@ export class ArcherRig {
   private readonly bodyPivot = new THREE.Group();
 
   private character: THREE.Object3D | null = null;
-  private nockedArrow: THREE.Object3D | null = null;
 
   private readonly bones = new Map<string, THREE.Bone>();
   private readonly restRotations = new Map<string, THREE.Quaternion>();
@@ -82,7 +81,6 @@ export class ArcherRig {
   private drawAmount = 0;
   private smoothedDraw = 0;
   private pitch = 0.2;
-  private yaw = 0;
   private flashUntil = 0;
   private wasFlashing = false;
   private recoil = 0;
@@ -101,18 +99,17 @@ export class ArcherRig {
   }
 
   async load(options: ArcherVisualOptions): Promise<void> {
-    const [character, bow, arrow, quiver] = await Promise.all([
+    // No separate arrow is attached: the bow mesh is modelled with one already
+    // nocked, and adding another put two arrows on the bow.
+    const [character, bow, quiver] = await Promise.all([
       instantiate(options.model),
       instantiate('bow'),
-      instantiate('arrow'),
       instantiate('quiver'),
     ]);
 
     this.character = character;
     this.bodyPivot.add(character);
     this.collectBones(character);
-
-    this.nockedArrow = arrow;
 
     const hand = this.bones.get('LeftHand');
     if (hand) {
@@ -130,10 +127,6 @@ export class ArcherRig {
       // No skeleton: hold the bow on a floating pivot, as before.
       this.aimPivot.add(bow);
     }
-
-    // The arrow rides the bow, so it is nocked wherever the bow ends up.
-    bow.add(arrow);
-    arrow.position.set(0, 0, 0);
 
     quiver.position.set(-0.2, 0.95, -0.14);
     quiver.rotation.set(0.22, 0, 0.3);
@@ -156,10 +149,9 @@ export class ArcherRig {
     });
   }
 
-  /** Elevation in radians — the number the gauge shows. */
-  setAim(pitch: number, yaw: number): void {
+  /** Elevation in radians — the number the gauge shows. Aiming is Y only. */
+  setAim(pitch: number): void {
     this.pitch = pitch;
-    this.yaw = yaw;
   }
 
   setDraw(amount: number): void {
@@ -169,11 +161,10 @@ export class ArcherRig {
   release(): void {
     this.drawAmount = 0;
     this.recoil = 1;
-    if (this.nockedArrow) this.nockedArrow.visible = false;
   }
 
   nock(): void {
-    if (this.nockedArrow) this.nockedArrow.visible = true;
+    // The bow carries its own arrow; nothing to show or hide.
   }
 
   flashHit(): void {
@@ -211,16 +202,15 @@ export class ArcherRig {
       if (hips && hipsRest) {
         this.breathePhase += deltaSeconds * 1.9;
         const calm = 1 - this.smoothedDraw * 0.75;
-        this.scratchEuler.set(Math.sin(this.breathePhase) * 0.02 * calm, this.yaw * 0.5, 0);
+        this.scratchEuler.set(Math.sin(this.breathePhase) * 0.02 * calm, 0, 0);
         this.scratchQuat.setFromEuler(this.scratchEuler);
         hips.quaternion.copy(hipsRest).multiply(this.scratchQuat);
         hips.position.y += 0; // position stays on the rig; rotation carries the motion
       }
     } else {
       // Unrigged stand-in: swing the bow pivot and lean the body.
-      this.aimPivot.rotation.set(-this.pitch, this.yaw, 0);
+      this.aimPivot.rotation.set(-this.pitch, 0, 0);
       this.bodyPivot.rotation.x = -this.smoothedDraw * 0.05;
-      this.bodyPivot.rotation.y = this.yaw * 0.7;
     }
 
     if (this.recoil > 0) {
@@ -228,11 +218,6 @@ export class ArcherRig {
       const kick = this.recoil * 0.09;
       if (this.rigged) this.facingGroup.position.z = -kick;
       else this.aimPivot.position.z = LOOSE_BOW_HAND.z - kick;
-    }
-
-    if (this.nockedArrow) {
-      // Slide the nocked arrow back along the shaft as the bow is drawn.
-      this.nockedArrow.position.set(0, 0, -this.smoothedDraw * 0.34);
     }
 
     const flashing = nowMs < this.flashUntil;

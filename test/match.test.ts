@@ -4,7 +4,7 @@ import { arenaByIndex } from '../src/arenas';
 import { chooseBotShot, createBotMemory } from '../src/bot';
 import { applyAction, archersFor, emptyMatch, replay } from '../src/match';
 import type { MatchAction, MatchState, Seat } from '../src/match';
-import { MAX_PITCH, MAX_YAW, simulateShot } from '../src/sim';
+import { MAX_PITCH, simulateShot } from '../src/sim';
 import type { ArcherStats } from '../src/sim';
 
 const P0 = 'player-0';
@@ -32,12 +32,8 @@ function killerShot(state: MatchState, seat: Seat) {
     const pitch = -0.1 + (a / 110) * 0.85;
     for (let p = 0; p < 22; p += 1) {
       const power = 0.35 + (p / 22) * 0.65;
-      for (let w = 0; w < 17; w += 1) {
-        // Yaw is searched too: crosswind blows a straight shot off target.
-        const yaw = -MAX_YAW + (w / 16) * MAX_YAW * 2;
-        const input = { pitch, yaw, power };
-        if (simulateShot(arena, archers, seat, input).hit?.zone === 'body') return input;
-      }
+      const input = { pitch, power };
+      if (simulateShot(arena, archers, seat, input).hit?.zone === 'body') return input;
     }
   }
   throw new Error('no body shot found');
@@ -94,7 +90,7 @@ describe('match reducer', () => {
       state = act(state, seat === 0 ? P0 : P1, 'shoot', killerShot(state, seat));
       guard += 1;
     }
-    const frozen = act(state, P0, 'shoot', { pitch: 0.3, yaw: 0, power: 0.9 });
+    const frozen = act(state, P0, 'shoot', { pitch: 0.3, power: 0.9 });
     expect(frozen.health).toEqual(state.health);
     expect(frozen.winner).toBe(state.winner);
   });
@@ -161,7 +157,6 @@ describe('bot', () => {
       const shot = chooseBotShot(arena, archersFor(state), 1, arena.botSkill, memory);
       expect(shot.power).toBeGreaterThanOrEqual(0.2);
       expect(shot.power).toBeLessThanOrEqual(1);
-      expect(Math.abs(shot.yaw)).toBeLessThanOrEqual(MAX_YAW);
       expect(shot.pitch).toBeLessThanOrEqual(MAX_PITCH);
     }
   });

@@ -4,9 +4,7 @@ import { ARENAS, arenaByIndex, highestUnlockedArena } from '../src/arenas';
 import {
   MAX_LAUNCH_SPEED,
   MAX_PITCH,
-  MAX_YAW,
   archersOf,
-  facingOf,
   muzzleOf,
   pitchToDegrees,
   simulateShot,
@@ -29,13 +27,7 @@ function archersFor(arena: ArenaSpec): [ArcherState, ArcherState] {
   return archersOf(arena, [STATS, STATS], [100, 100]);
 }
 
-/**
- * Search for a shot that lands on the given zone, so tests stay robust.
- *
- * Yaw is part of the search because crosswind blows every straight shot off
- * target in the later arenas — correcting for it is the player's job, and a
- * search that ignored it wrongly reported those arenas as unwinnable.
- */
+/** Search for a shot that lands on the given zone, so tests stay robust. */
 function findShotHitting(
   arena: ArenaSpec,
   archers: [ArcherState, ArcherState],
@@ -46,12 +38,9 @@ function findShotHitting(
     const pitch = -0.1 + (a / 110) * 0.85;
     for (let p = 0; p < 22; p += 1) {
       const power = 0.35 + (p / 22) * 0.65;
-      for (let w = 0; w < 17; w += 1) {
-        const yaw = -MAX_YAW + (w / 16) * MAX_YAW * 2;
-        const input = { pitch, yaw, power };
-        const result = simulateShot(arena, archers, shooter, input);
-        if (result.hit?.zone === zone) return { input, result };
-      }
+      const input = { pitch, power };
+      const result = simulateShot(arena, archers, shooter, input);
+      if (result.hit?.zone === zone) return { input, result };
     }
   }
   return null;
@@ -60,7 +49,7 @@ function findShotHitting(
 describe('simulateShot', () => {
   it('is deterministic — identical inputs give an identical outcome', () => {
     const archers = archersFor(FLAT);
-    const input = { pitch: 0.22, yaw: 0.02, power: 0.82 };
+    const input = { pitch: 0.22, power: 0.82 };
     const a = simulateShot(FLAT, archers, 0, input);
     const b = simulateShot(FLAT, archers, 0, input);
 
@@ -72,14 +61,14 @@ describe('simulateShot', () => {
 
   it('starts the arrow at the shooter’s bow hand', () => {
     const archers = archersFor(FLAT);
-    const result = simulateShot(FLAT, archers, 0, { pitch: 0.2, yaw: 0, power: 0.6 });
-    expect(result.path[0]).toEqual(muzzleOf(archers[0], facingOf(0)));
+    const result = simulateShot(FLAT, archers, 0, { pitch: 0.2, power: 0.6 });
+    expect(result.path[0]).toEqual(muzzleOf(archers[0]));
   });
 
   it('sends seat 0 down-range and seat 1 back the other way', () => {
     const archers = archersFor(FLAT);
-    const forward = simulateShot(FLAT, archers, 0, { pitch: 0.2, yaw: 0, power: 0.8 });
-    const back = simulateShot(FLAT, archers, 1, { pitch: 0.2, yaw: 0, power: 0.8 });
+    const forward = simulateShot(FLAT, archers, 0, { pitch: 0.2, power: 0.8 });
+    const back = simulateShot(FLAT, archers, 1, { pitch: 0.2, power: 0.8 });
 
     const endZ = (r: typeof forward) => r.path[r.path.length - 1].z;
     expect(endZ(forward)).toBeGreaterThan(0);
@@ -88,7 +77,7 @@ describe('simulateShot', () => {
 
   it('drops a weak shot onto the ground short of the target', () => {
     const archers = archersFor(FLAT);
-    const result = simulateShot(FLAT, archers, 0, { pitch: -0.1, yaw: 0, power: 0.21 });
+    const result = simulateShot(FLAT, archers, 0, { pitch: -0.1, power: 0.21 });
     expect(result.hit).toBeNull();
     expect(result.path[result.path.length - 1].z).toBeLessThan(FLAT.range);
   });
@@ -129,36 +118,51 @@ describe('simulateShot', () => {
     expect(blocked.hit).toBeNull();
   });
 
-  it('lets crosswind push the arrow sideways', () => {
+  it('never drifts off the lane — there is no lateral axis to drift along', () => {
     const archers = archersFor(FLAT);
-    const input = { pitch: 0.25, yaw: 0, power: 0.8 };
-    const calm = simulateShot(FLAT, archers, 0, input);
-    const gale = simulateShot({ ...FLAT, wind: 8 }, archers, 0, input);
-
-    const endX = (r: typeof calm) => r.path[r.path.length - 1].x;
-    expect(endX(gale)).toBeGreaterThan(endX(calm) + 0.5);
+    for (const wind of [-6, 0, 6]) {
+      const result = simulateShot({ ...FLAT, wind }, archers, 0, { pitch: 0.25, power: 0.8 });
+      for (const p of result.path) expect(p.x).toBe(0);
+    }
   });
 
-  it('lets yaw aim off to the side, which is how wind gets corrected', () => {
+  it('lengthens a shot with a tailwind and shortens it with a headwind', () => {
     const archers = archersFor(FLAT);
-    const straight = simulateShot(FLAT, archers, 0, { pitch: 0.25, yaw: 0, power: 0.8 });
-    const right = simulateShot(FLAT, archers, 0, { pitch: 0.25, yaw: 0.12, power: 0.8 });
+    const input = { pitch: 0.25, power: 0.8 };
+    const endZ = (wind: number): number => {
+      const r = simulateShot({ ...FLAT, wind }, archers, 0, input);
+      return r.path[r.path.length - 1].z;
+    };
+    expect(endZ(5)).toBeGreaterThan(endZ(0));
+    expect(endZ(-5)).toBeLessThan(endZ(0));
+  });
 
-    const endX = (r: typeof straight) => r.path[r.path.length - 1].x;
-    expect(endX(right)).toBeGreaterThan(endX(straight));
+  it('hands both archers the same wind, so neither end is favoured', () => {
+    // Wind is applied along the shooter's facing; a tailwind for one must not
+    // be a headwind for the other.
+    const archers = archersFor(FLAT);
+    // A shot that lands, so the comparison is the flight and not a bound.
+    const input = { pitch: 0.25, power: 0.45 };
+    const forward = simulateShot({ ...FLAT, wind: 5 }, archers, 0, input);
+    const back = simulateShot({ ...FLAT, wind: 5 }, archers, 1, input);
+
+    const travelled = (r: typeof forward, from: number) =>
+      Math.abs(r.path[r.path.length - 1].z - from);
+    expect(travelled(forward, 0)).toBeCloseTo(travelled(back, FLAT.range), 5);
+    expect(travelled(forward, 0)).toBeLessThan(FLAT.range);
   });
 
   it('clamps absurd inputs rather than flying forever', () => {
     const archers = archersFor(FLAT);
-    const result = simulateShot(FLAT, archers, 0, { pitch: 99, yaw: 99, power: 99 });
+    const result = simulateShot(FLAT, archers, 0, { pitch: 99, power: 99 });
     expect(result.flightTime).toBeLessThanOrEqual(14);
     expect(Number.isFinite(result.path[result.path.length - 1].z)).toBe(true);
   });
 
   it('keeps launch speed proportional to power', () => {
     const archers = archersFor(FLAT);
-    const slow = simulateShot(FLAT, archers, 0, { pitch: 0.3, yaw: 0, power: 0.4 });
-    const fast = simulateShot(FLAT, archers, 0, { pitch: 0.3, yaw: 0, power: 1 });
+    const slow = simulateShot(FLAT, archers, 0, { pitch: 0.3, power: 0.4 });
+    const fast = simulateShot(FLAT, archers, 0, { pitch: 0.3, power: 1 });
     expect(fast.path.length).toBeGreaterThan(slow.path.length);
     expect(MAX_LAUNCH_SPEED).toBeGreaterThan(0);
   });

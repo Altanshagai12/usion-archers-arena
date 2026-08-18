@@ -4,20 +4,20 @@
  * Three quantities come out of one gesture, deliberately decoupled so they
  * never fight each other:
  *
- *   vertical drag   → pitch (the number on the elevation gauge)
- *   horizontal drag → yaw (windage)
- *   time held       → draw strength, which fills like a real bowstring
+ *   vertical drag → pitch (the number on the elevation gauge)
+ *   time held     → draw strength, which fills like a real bowstring
+ *
+ * Horizontal movement does nothing on purpose: both archers stand on the same
+ * line, so elevation is the only thing there is to judge.
  *
  * Pitch resumes from the last shot rather than resetting, so walking your aim
  * in — the whole skill of the game — is a small nudge rather than a re-aim.
  */
 
-import { MAX_PITCH, MAX_YAW, MIN_PITCH, MIN_POWER, clampPitch, clampYaw } from './sim';
+import { MAX_PITCH, MIN_PITCH, MIN_POWER, clampPitch } from './sim';
 
 /** Vertical pixels that sweep the entire elevation range. */
 const PITCH_TRAVEL_PX = 340;
-/** Horizontal pixels that sweep the entire windage range. */
-const YAW_TRAVEL_PX = 300;
 /** Seconds of hold to go from the minimum draw to full. */
 const FULL_DRAW_SECONDS = 1.05;
 /** A release before this reads as a mis-tap, not a shot. */
@@ -25,7 +25,6 @@ const MIN_HOLD_MS = 190;
 
 export interface AimEvent {
   pitch: number;
-  yaw: number;
   power: number;
 }
 
@@ -38,12 +37,11 @@ export interface AimCallbacks {
 
 export class AimController {
   private pointerId: number | null = null;
-  private originX = 0;
   private originY = 0;
   private startedAt = 0;
   private pitchAtStart = 0.25;
   private enabled = false;
-  private current: AimEvent = { pitch: 0.25, yaw: 0, power: MIN_POWER };
+  private current: AimEvent = { pitch: 0.25, power: MIN_POWER };
   private frame = 0;
 
   constructor(
@@ -77,20 +75,20 @@ export class AimController {
     this.current = { ...this.current, pitch: clampPitch(pitch) };
   }
 
-  private compute(x: number, y: number, nowMs: number): AimEvent {
-    const dx = x - this.originX;
+  private compute(_x: number, y: number, nowMs: number): AimEvent {
     const dy = y - this.originY;
 
     // Pull down to raise the bow, the way you lift a sight onto a far target.
+    // Horizontal movement is deliberately ignored: both archers stand on the
+    // same line, so there is nothing to aim across.
     const pitch = clampPitch(
       this.pitchAtStart + (dy / PITCH_TRAVEL_PX) * (MAX_PITCH - MIN_PITCH),
     );
-    const yaw = clampYaw((dx / YAW_TRAVEL_PX) * MAX_YAW * 2);
 
     const held = (nowMs - this.startedAt) / 1000;
     const power = Math.min(1, MIN_POWER + (held / FULL_DRAW_SECONDS) * (1 - MIN_POWER));
 
-    return { pitch, yaw, power };
+    return { pitch, power };
   }
 
   /** The draw keeps filling while the finger is still, so drive it per frame. */
@@ -107,7 +105,6 @@ export class AimController {
   private readonly handleDown = (event: PointerEvent): void => {
     if (!this.enabled || this.pointerId !== null) return;
     this.pointerId = event.pointerId;
-    this.originX = event.clientX;
     this.originY = event.clientY;
     this.lastX = event.clientX;
     this.lastY = event.clientY;

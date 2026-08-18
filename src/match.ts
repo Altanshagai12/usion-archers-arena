@@ -3,7 +3,7 @@
  *
  * Every client — and every client that rejoins mid-match — folds the same
  * actions in the same order and lands on the same state, so a shot only has to
- * cross the network as `{pitch, yaw, power}`. Nothing in here may touch the
+ * cross the network as `{pitch, power}`. Nothing in here may touch the
  * DOM, the network, the clock or randomness.
  */
 
@@ -118,7 +118,6 @@ export function applyAction(
 
     const input: ShotInput = {
       pitch: Number(action.data?.pitch) || 0,
-      yaw: Number(action.data?.yaw) || 0,
       power: Number(action.data?.power) || 0,
     };
     const arena = arenaByIndex(next.arenaIndex);

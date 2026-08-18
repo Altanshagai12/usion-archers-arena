@@ -1,14 +1,18 @@
 /**
- * Deterministic 3D ballistics + damage resolution.
+ * Deterministic ballistics + damage resolution.
  *
- * The game is played down-range from behind the archer, so the sim is fully 3D:
+ * Both archers stand on the same line — the lane runs straight down z — so
+ * aiming is elevation only. There is no lateral axis to aim along:
  *
  *   z — distance down-range. The shooter stands at z = 0, the target at z = +D.
- *   y — height above the ground.
- *   x — lateral. Wind pushes along it and the player aims across it (windage).
+ *   y — height above the ground. This is the only axis the player adjusts.
+ *
+ * Wind blows along the lane rather than across it, so it lengthens or shortens
+ * a shot instead of pushing it sideways, and it is applied along the shooter's
+ * own facing so both ends of the range meet the same head- or tailwind.
  *
  * Both players and the bot run this same function over the same inputs, so a
- * shot only travels the network as `{pitch, yaw, power}`. Keep it pure: no
+ * shot only travels the network as `{pitch, power}`. Keep it pure: no
  * Math.random, no Date.now, no DOM.
  */
 
@@ -44,7 +48,11 @@ export interface Obstacle {
 export interface ArenaSpec {
   id: string;
   gravity: number;
-  /** Lateral wind acceleration, m/s². Positive pushes arrows to the right. */
+  /**
+   * Along-lane wind, m/s². Positive is a tailwind that carries the arrow
+   * further; negative is a headwind. Applied along the shooter's facing, so it
+   * is identical for both archers.
+   */
   wind: number;
   drag: number;
   /** Down-range distance between the two archers, metres. */
@@ -57,8 +65,6 @@ export interface ArenaSpec {
 export interface ShotInput {
   /** Elevation above horizontal, radians. This is the number the gauge shows. */
   pitch: number;
-  /** Lateral aim, radians. Positive aims right. */
-  yaw: number;
   /** Draw strength, 0..1. */
   power: number;
 }
@@ -83,9 +89,8 @@ export interface ShotResult {
 /** Arrow speed at power = 1, in m/s. */
 export const MAX_LAUNCH_SPEED = 46;
 export const MIN_POWER = 0.2;
-export const MIN_PITCH = -0.14; // ≈ -8°
-export const MAX_PITCH = 0.79; // ≈ 45°
-export const MAX_YAW = 0.14; // ≈ ±8°
+export const MIN_PITCH = -0.14; // about -8 degrees
+export const MAX_PITCH = 0.79; // about 45 degrees
 
 const DT = 1 / 120;
 const MAX_FLIGHT_SECONDS = 14;
@@ -102,16 +107,11 @@ const BODY_HALF_WIDTH = 0.3;
 const BODY_HALF_DEPTH = 0.24;
 const LIMB_HALF_WIDTH = 0.28;
 
-/** Bow hand, relative to the shooter's feet. */
+/** Bow hand height, relative to the shooter's feet. */
 const MUZZLE_UP = 1.5;
-const MUZZLE_SIDE = 0.16;
 
 export function clampPitch(pitch: number): number {
   return Math.min(MAX_PITCH, Math.max(MIN_PITCH, pitch));
-}
-
-export function clampYaw(yaw: number): number {
-  return Math.min(MAX_YAW, Math.max(-MAX_YAW, yaw));
 }
 
 export function clampPower(power: number): number {
@@ -123,12 +123,8 @@ export function pitchToDegrees(pitch: number): number {
   return Math.round((pitch * 180) / Math.PI);
 }
 
-export function muzzleOf(archer: ArcherState, facing: 1 | -1): Vec3 {
-  return {
-    x: archer.pos.x + MUZZLE_SIDE * facing,
-    y: archer.pos.y + MUZZLE_UP,
-    z: archer.pos.z,
-  };
+export function muzzleOf(archer: ArcherState): Vec3 {
+  return { x: archer.pos.x, y: archer.pos.y + MUZZLE_UP, z: archer.pos.z };
 }
 
 /** Seat 0 shoots toward +z, seat 1 back toward -z. */
@@ -147,14 +143,34 @@ function insideObstacle(o: Obstacle, p: Vec3): boolean {
   );
 }
 
+function zoneAtPlane(archer: ArcherState, p: Vec3): HitZone | null {
+  const dx = p.x - archer.pos.x;
+  const dy = p.y - archer.pos.y;
+
+  const hy = dy - HEAD_CENTRE_Y;
+  if (dx * dx + hy * hy <= HEAD_RADIUS * HEAD_RADIUS) return 'head';
+
+  if (Math.abs(dx) <= BODY_HALF_WIDTH && dy >= BODY_BOTTOM_Y && dy <= BODY_TOP_Y) {
+    return 'body';
+  }
+
+  // Legs below the torso, and the arms above it.
+  if (Math.abs(dx) <= LIMB_HALF_WIDTH && dy >= 0 && dy < BODY_BOTTOM_Y) return 'limb';
+  if (Math.abs(dx) <= LIMB_HALF_WIDTH && dy > BODY_TOP_Y && dy < HEAD_CENTRE_Y - HEAD_RADIUS) {
+    return 'limb';
+  }
+
+  return null;
+}
+
 /**
  * Test the segment an arrow covered this step against the target, not the end
  * point.
  *
- * An arrow moves ~0.4 m per step while the torso is 0.48 m deep and the head
- * 0.4 m across, so a point test tunnels straight through a target it should
- * have hit — which made whole arenas unwinnable. Instead, find where the
- * segment crosses the target's plane and test that crossing in 2D.
+ * An arrow moves about 0.4 m per step while the torso is 0.48 m deep and the
+ * head 0.4 m across, so a point test tunnels straight through a target it
+ * should have hit — which made whole arenas unwinnable. Instead, find where
+ * the segment crosses the target's plane and test that crossing in 2D.
  */
 function hitOnSegment(archer: ArcherState, a: Vec3, b: Vec3): HitZone | null {
   const tz = archer.pos.z;
@@ -169,32 +185,11 @@ function hitOnSegment(archer: ArcherState, a: Vec3, b: Vec3): HitZone | null {
   if (t < -0.001 || t > 1.001) return null;
 
   const clamped = Math.min(1, Math.max(0, t));
-  const p: Vec3 = {
+  return zoneAtPlane(archer, {
     x: a.x + (b.x - a.x) * clamped,
     y: a.y + (b.y - a.y) * clamped,
     z: tz,
-  };
-  return zoneAtPlane(archer, p);
-}
-
-function zoneAtPlane(archer: ArcherState, p: Vec3): HitZone | null {
-  const dx = p.x - archer.pos.x;
-  const dy = p.y - archer.pos.y;
-
-  const hy = dy - HEAD_CENTRE_Y;
-  if (dx * dx + hy * hy <= HEAD_RADIUS * HEAD_RADIUS) return 'head';
-
-  if (Math.abs(dx) <= BODY_HALF_WIDTH && dy >= BODY_BOTTOM_Y && dy <= BODY_TOP_Y) {
-    return 'body';
-  }
-
-  // Legs below the torso, and the arms out to either side of it.
-  if (Math.abs(dx) <= LIMB_HALF_WIDTH && dy >= 0 && dy < BODY_BOTTOM_Y) return 'limb';
-  if (Math.abs(dx) <= LIMB_HALF_WIDTH && dy > BODY_TOP_Y && dy < HEAD_CENTRE_Y - HEAD_RADIUS) {
-    return 'limb';
-  }
-
-  return null;
+  });
 }
 
 function damageFor(zone: HitZone, stats: ArcherStats): number {
@@ -203,7 +198,7 @@ function damageFor(zone: HitZone, stats: ArcherStats): number {
   return Math.round(stats.baseDamage * LIMB_MULTIPLIER);
 }
 
-/** Build the two archer states an arena implies. */
+/** Build the two archer states an arena implies. Both stand on x = 0. */
 export function archersOf(
   arena: ArenaSpec,
   stats: [ArcherStats, ArcherStats],
@@ -233,17 +228,20 @@ export function simulateShot(
   const facing = facingOf(shooter);
 
   const pitch = clampPitch(input.pitch);
-  const yaw = clampYaw(input.yaw);
   const power = clampPower(input.power);
   const speed = MAX_LAUNCH_SPEED * power;
 
-  const start = muzzleOf(shooterState, facing);
-  let { x, y, z } = start;
+  const start = muzzleOf(shooterState);
+  const x = start.x;
+  let y = start.y;
+  let z = start.z;
 
-  const horizontal = Math.cos(pitch) * speed;
-  let vx = Math.sin(yaw) * horizontal * facing;
   let vy = Math.sin(pitch) * speed;
-  let vz = Math.cos(yaw) * horizontal * facing;
+  let vz = Math.cos(pitch) * speed * facing;
+
+  // A tailwind pushes the arrow the way it was fired, whichever end it came
+  // from, so neither archer gets a free ride.
+  const alongLane = arena.wind * facing;
 
   const path: Vec3[] = [{ x, y, z }];
   let t = 0;
@@ -251,10 +249,8 @@ export function simulateShot(
 
   while (t < MAX_FLIGHT_SECONDS) {
     // Semi-implicit Euler at a fixed step — identical on every machine.
-    vx += (arena.wind - arena.drag * vx) * DT;
     vy += (-arena.gravity - arena.drag * vy) * DT;
-    vz += -arena.drag * vz * DT;
-    x += vx * DT;
+    vz += (alongLane - arena.drag * vz) * DT;
     y += vy * DT;
     z += vz * DT;
     t += DT;
@@ -284,7 +280,9 @@ export function simulateShot(
       }
     }
 
-    if (Math.abs(x) > 60 || y > 140 || z < -25 || z > arena.range + 30) {
+    // Symmetric about the lane so a wild miss is cut off at the same distance
+    // whichever end it was fired from.
+    if (y > 140 || z < -30 || z > arena.range + 30) {
       return { path, hit: null, blocked: false, flightTime: t };
     }
 
@@ -307,24 +305,22 @@ export function previewPath(
   seconds = 0.32,
 ): Vec3[] {
   const pitch = clampPitch(input.pitch);
-  const yaw = clampYaw(input.yaw);
   const power = clampPower(input.power);
   const speed = MAX_LAUNCH_SPEED * power;
-  const start = muzzleOf(shooter, facing);
+  const start = muzzleOf(shooter);
 
-  let { x, y, z } = start;
-  const horizontal = Math.cos(pitch) * speed;
-  let vx = Math.sin(yaw) * horizontal * facing;
+  const x = start.x;
+  let y = start.y;
+  let z = start.z;
   let vy = Math.sin(pitch) * speed;
-  let vz = Math.cos(yaw) * horizontal * facing;
+  let vz = Math.cos(pitch) * speed * facing;
+  const alongLane = arena.wind * facing;
 
   const path: Vec3[] = [{ x, y, z }];
   const steps = Math.round(seconds / DT);
   for (let i = 0; i < steps; i += 1) {
-    vx += (arena.wind - arena.drag * vx) * DT;
     vy += (-arena.gravity - arena.drag * vy) * DT;
-    vz += -arena.drag * vz * DT;
-    x += vx * DT;
+    vz += (alongLane - arena.drag * vz) * DT;
     y += vy * DT;
     z += vz * DT;
     if (y <= GROUND_Y) break;

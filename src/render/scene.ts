@@ -37,7 +37,6 @@ export interface CameraShot {
   /** +1 shoots toward +z, -1 toward -z. */
   facing: 1 | -1;
   pitch: number;
-  yaw: number;
 }
 
 export interface SceneHandles {
@@ -185,16 +184,14 @@ export function createScene(mount: HTMLElement, viewport: Viewport): SceneHandle
   const focus = new THREE.Vector3();
 
   const placeCamera = (shot: CameraShot): void => {
-    const { origin, facing, pitch, yaw } = shot;
+    const { origin, facing, pitch } = shot;
 
-    // Sit behind the archer. Yaw slides the eye sideways and swings the look
-    // point across, which reads as leaning into the shot; pitch lifts the look
-    // point so a high-angle shot shows more sky.
-    const lateral = EYE_SIDE * facing + Math.sin(yaw) * 5 * facing;
-    eye.set(origin.x + lateral, origin.y + EYE_UP, origin.z - EYE_BACK * facing);
+    // Sit behind and just off the archer's shoulder. Pitch lifts the look point
+    // so a high-angle shot shows more sky; there is no lateral aim to follow.
+    eye.set(origin.x + EYE_SIDE * facing, origin.y + EYE_UP, origin.z - EYE_BACK * facing);
 
     focus.set(
-      origin.x + Math.sin(yaw) * LOOK_AHEAD * facing * 1.6,
+      origin.x,
       origin.y + LOOK_UP + Math.sin(pitch) * 9,
       origin.z + LOOK_AHEAD * facing,
     );

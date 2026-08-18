@@ -94,8 +94,8 @@ class Game {
   private builtArenaIndex = -1;
 
   private playback: Playback | null = null;
-  private aim: ShotInput = { pitch: 0.25, yaw: 0, power: 0.5 };
-  private remoteAim: { seat: Seat; pitch: number; yaw: number } | null = null;
+  private aim: ShotInput = { pitch: 0.25, power: 0.5 };
+  private remoteAim: { seat: Seat; pitch: number } | null = null;
   private readonly cameraOrigin = new THREE.Vector3();
   private lastFrameAt = 0;
 
@@ -349,11 +349,7 @@ class Game {
     if (message.action_type !== 'aim') return;
     const seat = this.seatOf(message.player_id);
     if (seat === null || seat === this.mySeat) return;
-    this.remoteAim = {
-      seat,
-      pitch: Number(message.action_data?.pitch) || 0,
-      yaw: Number(message.action_data?.yaw) || 0,
-    };
+    this.remoteAim = { seat, pitch: Number(message.action_data?.pitch) || 0 };
   }
 
   private handleSync(data: any): void {
@@ -413,7 +409,7 @@ class Game {
     this.resultReported = false;
     this.playback = null;
     this.remoteAim = null;
-    this.aim = { pitch: 0.25, yaw: 0, power: 0.5 };
+    this.aim = { pitch: 0.25, power: 0.5 };
     this.aimController?.resetPitch(0.25);
     this.arenaView.hideArrow();
     this.arenaView.hideTracer();
@@ -541,7 +537,7 @@ class Game {
     if (this.state.turn !== this.mySeat || this.state.over || this.playback) return;
 
     this.aim = aim;
-    this.rigs[this.mySeat]?.setAim(aim.pitch, aim.yaw);
+    this.rigs[this.mySeat]?.setAim(aim.pitch);
     this.rigs[this.mySeat]?.setDraw(aim.power);
     this.hud.setPower(aim.power);
     this.hud.setElevation(aim.pitch);
@@ -556,7 +552,7 @@ class Game {
     const now = performance.now();
     if (!this.vsBot && now - this.lastAimSent > AIM_BROADCAST_MS) {
       this.lastAimSent = now;
-      this.net.sendRealtime('aim', { pitch: aim.pitch, yaw: aim.yaw });
+      this.net.sendRealtime('aim', { pitch: aim.pitch });
     }
   }
 
@@ -596,7 +592,7 @@ class Game {
     const result = simulateShot(arena, archers, seat, input);
 
     this.aimController?.setEnabled(false);
-    this.rigs[seat]?.setAim(input.pitch, input.yaw);
+    this.rigs[seat]?.setAim(input.pitch);
     this.rigs[seat]?.release();
     this.arenaView.clearTrail();
     this.remoteAim = null;
@@ -728,7 +724,7 @@ class Game {
     this.rigs[1]?.update(now, dt);
 
     if (this.remoteAim) {
-      this.rigs[this.remoteAim.seat]?.setAim(this.remoteAim.pitch, this.remoteAim.yaw);
+      this.rigs[this.remoteAim.seat]?.setAim(this.remoteAim.pitch);
       this.rigs[this.remoteAim.seat]?.setDraw(0.7);
     }
 
@@ -750,7 +746,6 @@ class Game {
         origin: this.cameraOrigin,
         facing: facingOf(this.mySeat),
         pitch: this.aim.pitch,
-        yaw: this.aim.yaw,
       });
     }
 

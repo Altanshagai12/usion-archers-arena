@@ -2,8 +2,12 @@
  * The five arenas, in ladder order.
  *
  * Each one is a shooting range: you stand at z = 0 and the opponent stands at
- * z = range. Later arenas push the range out, split the two firing heights and
- * add crosswind, so the elevation you dial on the gauge matters more and more.
+ * z = range, on the same line. Later arenas push the range out and add wind
+ * along the lane, so the elevation you dial on the gauge matters more.
+ *
+ * Firing heights come in three shapes: both level (greenwood, rampart), the
+ * opponent a step above you (ruins), and a big drop or climb between the two
+ * (cliffs shoots down, citadel shoots up).
  *
  * Props are placed in world space (x lateral, y height, z down-range) and are
  * purely decorative unless they also appear in `obstacles`.
@@ -100,9 +104,12 @@ export const ARENAS: ArenaDefinition[] = [
     wind: 0,
     drag: 0.05,
     range: 30,
-    elevation: [1.1, 0],
+    elevation: [1.1, 1.1],
     obstacles: [],
-    mounds: [{ at: { x: 0, y: 0, z: 0 }, radius: 3.6, height: 1.1 }],
+    mounds: [
+      { at: { x: 0, y: 0, z: 0 }, radius: 3.6, height: 1.1 },
+      { at: { x: 0, y: 0, z: 30 }, radius: 3.6, height: 1.1 },
+    ],
     ridges: [
       [-34, 26, 20],
       [-8, 34, 24],
@@ -141,14 +148,14 @@ export const ARENAS: ArenaDefinition[] = [
     unlockRating: 1050,
     botSkill: 0.47,
     gravity: BASE_GRAVITY,
-    wind: -1.1,
+    wind: -1.4,
     drag: 0.052,
     range: 40,
-    elevation: [1.1, 1.9],
+    elevation: [1.1, 2.8],
     obstacles: baleObstacles(RUINS_BALES),
     mounds: [
       { at: { x: 0, y: 0, z: 0 }, radius: 3.6, height: 1.1 },
-      { at: { x: 0, y: 0, z: 40 }, radius: 3.2, height: 1.9 },
+      { at: { x: 0, y: 0, z: 40 }, radius: 3.2, height: 2.8 },
     ],
     ridges: [
       [-30, 30, 22],
@@ -172,7 +179,7 @@ export const ARENAS: ArenaDefinition[] = [
       { model: 'ruin_column', at: { x: -7.4, y: 0, z: 36 }, scale: 1.15, rotationY: 2.6 },
       { model: 'rock', at: { x: 6.2, y: 0, z: 21 }, scale: 0.9, rotationY: 0.7 },
       { model: 'target', at: { x: -4.8, y: 0, z: 27 }, scale: 1, rotationY: 0 },
-      { model: 'banner', at: { x: 3.2, y: 1.9, z: 41.5 }, scale: 0.9, rotationY: 0 },
+      { model: 'banner', at: { x: 3.2, y: 2.8, z: 41.5 }, scale: 0.9, rotationY: 0 },
       ...bales(RUINS_BALES),
     ],
   },
@@ -182,7 +189,7 @@ export const ARENAS: ArenaDefinition[] = [
     unlockRating: 1150,
     botSkill: 0.58,
     gravity: BASE_GRAVITY,
-    wind: 1.9,
+    wind: 2.2,
     drag: 0.052,
     range: 50,
     elevation: [2.4, 2.4],
@@ -224,14 +231,14 @@ export const ARENAS: ArenaDefinition[] = [
     unlockRating: 1280,
     botSkill: 0.7,
     gravity: BASE_GRAVITY,
-    wind: -3.1,
+    wind: -2.6,
     drag: 0.058,
     range: 62,
-    elevation: [4.2, 0.6],
+    elevation: [5.2, 0.8],
     obstacles: baleObstacles(CLIFF_BALES),
     mounds: [
-      { at: { x: 0, y: 0, z: 0 }, radius: 4.4, height: 4.2 },
-      { at: { x: 0, y: 0, z: 62 }, radius: 3.4, height: 0.6 },
+      { at: { x: 0, y: 0, z: 0 }, radius: 4.4, height: 5.2 },
+      { at: { x: 0, y: 0, z: 62 }, radius: 3.4, height: 0.8 },
     ],
     ridges: [
       [-30, 36, 24],
@@ -265,14 +272,14 @@ export const ARENAS: ArenaDefinition[] = [
     unlockRating: 1420,
     botSkill: 0.84,
     gravity: BASE_GRAVITY,
-    wind: 3.8,
+    wind: 2.9,
     drag: 0.062,
     range: 75,
-    elevation: [2.2, 5.4],
+    elevation: [1.6, 6.4],
     obstacles: baleObstacles(CITADEL_BALES),
     mounds: [
-      { at: { x: 0, y: 0, z: 0 }, radius: 4, height: 2.2 },
-      { at: { x: 0, y: 0, z: 75 }, radius: 4.2, height: 5.4 },
+      { at: { x: 0, y: 0, z: 0 }, radius: 4, height: 1.6 },
+      { at: { x: 0, y: 0, z: 75 }, radius: 4.2, height: 6.4 },
     ],
     ridges: [
       [-28, 40, 26],
@@ -295,8 +302,8 @@ export const ARENAS: ArenaDefinition[] = [
       { model: 'castle_tower', at: { x: 17, y: 0, z: 66 }, scale: 0.92, rotationY: 0 },
       { model: 'castle_wall', at: { x: -14, y: 0, z: 34 }, scale: 1, rotationY: 0 },
       { model: 'castle_wall', at: { x: 14, y: 0, z: 34 }, scale: 1, rotationY: 0 },
-      { model: 'banner', at: { x: -3, y: 5.4, z: 76 }, scale: 0.95, rotationY: 0 },
-      { model: 'banner', at: { x: 3, y: 5.4, z: 76 }, scale: 0.95, rotationY: 0 },
+      { model: 'banner', at: { x: -3, y: 6.4, z: 76 }, scale: 0.95, rotationY: 0 },
+      { model: 'banner', at: { x: 3, y: 6.4, z: 76 }, scale: 0.95, rotationY: 0 },
       { model: 'target', at: { x: -5.2, y: 0, z: 46 }, scale: 1, rotationY: 0 },
       { model: 'target', at: { x: 5.2, y: 0, z: 58 }, scale: 1, rotationY: 0 },
       ...bales(CITADEL_BALES),

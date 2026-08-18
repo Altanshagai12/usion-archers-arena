@@ -1,8 +1,8 @@
 /**
  * Single-player opponent.
  *
- * The bot solves the same ballistics the player does — it searches pitch, yaw
- * and power through `simulateShot` and keeps the best — then deliberately
+ * The bot solves the same ballistics the player does — it searches pitch and
+ * power through `simulateShot` and keeps the best — then deliberately
  * degrades the answer by an amount set by the arena's `botSkill`. It also walks
  * its shots in the way a human does: a miss biases the next shot back toward
  * the target, so early arenas feel like a beginner finding the range rather
@@ -12,12 +12,11 @@
  * here. `sim.ts` stays pure.
  */
 
-import { MAX_PITCH, MAX_YAW, MIN_PITCH, clampPitch, clampYaw, simulateShot } from './sim';
+import { MAX_PITCH, MIN_PITCH, clampPitch, simulateShot } from './sim';
 import type { ArcherState, ArenaSpec, ShotInput, Vec3 } from './sim';
 
 const COARSE_PITCH = 16;
 const COARSE_POWER = 8;
-const COARSE_YAW = 5;
 const REFINE_STEPS = 5;
 
 const POWER_MIN = 0.4;
@@ -82,28 +81,24 @@ function solveBestShot(
   archers: [ArcherState, ArcherState],
   shooter: 0 | 1,
 ): ShotInput {
-  let best: ShotInput = { pitch: 0.25, yaw: 0, power: 0.8 };
+  let best: ShotInput = { pitch: 0.25, power: 0.8 };
   let bestScore = -Infinity;
 
   for (let i = 0; i < COARSE_PITCH; i += 1) {
     const pitch = MIN_PITCH + ((MAX_PITCH - MIN_PITCH) * i) / (COARSE_PITCH - 1);
     for (let j = 0; j < COARSE_POWER; j += 1) {
       const power = POWER_MIN + ((POWER_MAX - POWER_MIN) * j) / (COARSE_POWER - 1);
-      for (let k = 0; k < COARSE_YAW; k += 1) {
-        const yaw = -MAX_YAW + (2 * MAX_YAW * k) / (COARSE_YAW - 1);
-        const candidate = { pitch, yaw, power };
-        const score = scoreShot(arena, archers, shooter, candidate);
-        if (score > bestScore) {
-          bestScore = score;
-          best = candidate;
-        }
+      const candidate = { pitch, power };
+      const score = scoreShot(arena, archers, shooter, candidate);
+      if (score > bestScore) {
+        bestScore = score;
+        best = candidate;
       }
     }
   }
 
   let pitchSpan = (MAX_PITCH - MIN_PITCH) / (COARSE_PITCH - 1);
   let powerSpan = (POWER_MAX - POWER_MIN) / (COARSE_POWER - 1);
-  let yawSpan = (2 * MAX_YAW) / (COARSE_YAW - 1);
 
   for (let pass = 0; pass < 2; pass += 1) {
     for (let i = 0; i < REFINE_STEPS; i += 1) {
@@ -113,20 +108,16 @@ function solveBestShot(
           POWER_MAX,
           Math.max(POWER_MIN, best.power - powerSpan + (2 * powerSpan * j) / (REFINE_STEPS - 1)),
         );
-        for (let k = 0; k < REFINE_STEPS; k += 1) {
-          const yaw = best.yaw - yawSpan + (2 * yawSpan * k) / (REFINE_STEPS - 1);
-          const candidate = { pitch: clampPitch(pitch), yaw: clampYaw(yaw), power };
-          const score = scoreShot(arena, archers, shooter, candidate);
-          if (score > bestScore) {
-            bestScore = score;
-            best = candidate;
-          }
+        const candidate = { pitch: clampPitch(pitch), power };
+        const score = scoreShot(arena, archers, shooter, candidate);
+        if (score > bestScore) {
+          bestScore = score;
+          best = candidate;
         }
       }
     }
     pitchSpan /= 3;
     powerSpan /= 3;
-    yawSpan /= 3;
   }
 
   return best;
@@ -152,7 +143,6 @@ export function chooseBotShot(
   // A bot that has already fired a few times has "walked in" its range.
   const warmup = memory.shotsTaken === 0 ? 1.4 : memory.shotsTaken === 1 ? 1.12 : 1;
   const pitchError = gaussian() * 0.055 * sloppiness * warmup;
-  const yawError = gaussian() * 0.03 * sloppiness * warmup;
   const powerError = gaussian() * 0.09 * sloppiness * warmup;
 
   // Correct part of the previous miss — the human "one notch higher" instinct.
@@ -162,7 +152,6 @@ export function chooseBotShot(
 
   return {
     pitch: clampPitch(ideal.pitch + pitchError + correction),
-    yaw: clampYaw(ideal.yaw + yawError),
     power: Math.min(1, Math.max(0.2, ideal.power + powerError)),
   };
 }

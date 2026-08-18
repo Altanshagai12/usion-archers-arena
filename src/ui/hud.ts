@@ -121,8 +121,10 @@ export class Hud {
       this.windChip.textContent = `${t('hud.wind')} · ${t('hud.windCalm')}`;
       return;
     }
-    // The arrow points the way the wind pushes; the number is its strength.
-    this.windChip.textContent = `${t('hud.wind')} ${wind > 0 ? '→' : '←'} ${strength.toFixed(1)}`;
+    // Wind runs along the lane, so it carries a shot further or holds it back
+    // rather than pushing it sideways.
+    const label = wind > 0 ? t('hud.windTail') : t('hud.windHead');
+    this.windChip.textContent = `${t('hud.wind')} ${label} ${strength.toFixed(1)}`;
   }
 
   setNames(you: string, foe: string): void {
