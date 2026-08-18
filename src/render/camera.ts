@@ -4,8 +4,8 @@
  * Three viewpoints, and the moves between them are the point:
  *
  *   shoulder  behind you while you aim — the view you play from
- *   front     out in front of the opponent, looking back at them, so you watch
- *             them raise the bow and draw rather than seeing their back
+ *   approach  the same sight line, flown in close to the opponent, so you watch
+ *             them raise the bow with the shot still coming toward you
  *   flight    trailing an arrow while it is in the air
  *
  * Switching viewpoint is a timed, eased glide rather than a cut: the camera
@@ -22,11 +22,15 @@ const EYE_SIDE = 0.5;
 const LOOK_AHEAD = 18;
 const LOOK_UP = 1.3;
 
-/** Front view: stand off the target's bow side, a little above their eyeline. */
-const FRONT_DISTANCE = 4.6;
-const FRONT_SIDE = 1.9;
-const FRONT_UP = 1.9;
-const FRONT_LOOK_UP = 1.35;
+/**
+ * Approach view: the camera keeps YOUR line of sight and simply flies down the
+ * lane until it is standing close to the opponent. It never crosses behind
+ * them, so the shot still reads as coming toward you.
+ */
+const APPROACH_BACK = 5.4;
+const APPROACH_SIDE = 1.2;
+const APPROACH_UP = 1.95;
+const APPROACH_LOOK_UP = 1.3;
 
 /** Trailing offsets while following an arrow. */
 const ARROW_BACK = 6.5;
@@ -35,16 +39,17 @@ const ARROW_UP = 2.2;
 /** How long the camera takes to travel when the viewpoint changes. */
 const TRAVEL_SECONDS: Record<string, number> = {
   shoulder: 1.05,
-  front: 1.15,
+  approach: 1.15,
   flight: 0.4,
 };
 
 export type ViewRequest =
   | {
-      kind: 'shoulder' | 'front';
+      kind: 'shoulder' | 'approach';
       /** Which archer this view is of — part of the viewpoint identity. */
       seat: 0 | 1;
       origin: THREE.Vector3;
+      /** The direction the VIEWER shoots, so approach never crosses the lane. */
       facing: 1 | -1;
       pitch: number;
     }
@@ -119,13 +124,14 @@ export class CameraDirector {
       return;
     }
 
-    // Front: sit down-range of them, on the side, looking back at their chest.
+    // Approach: still on your side of them, just much closer — the camera
+    // travels straight down your own sight line rather than swinging around.
     this.desiredEye.set(
-      origin.x + FRONT_SIDE,
-      origin.y + FRONT_UP,
-      origin.z + FRONT_DISTANCE * facing,
+      origin.x + APPROACH_SIDE,
+      origin.y + APPROACH_UP,
+      origin.z - APPROACH_BACK * facing,
     );
-    this.desiredFocus.set(origin.x, origin.y + FRONT_LOOK_UP, origin.z);
+    this.desiredFocus.set(origin.x, origin.y + APPROACH_LOOK_UP, origin.z);
   }
 
   /**

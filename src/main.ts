@@ -648,8 +648,13 @@ class Game {
     const flightMs = (result.flightTime * 1000) / PLAYBACK_SPEED;
     window.setTimeout(
       () => {
+        // Leave the shaft standing where it landed so the miss is readable.
+        const path = result.path;
+        const last = path[path.length - 1] ?? null;
+        const before = path[path.length - 2] ?? null;
         this.playback = null;
         this.arenaView.hideArrow();
+        if (last) this.arenaView.stickArrow(last, before);
         if (zone) this.rigs[seat === 0 ? 1 : 0]?.knockDown();
         this.hud.showShotResult(zone, damage, blocked);
         this.refreshHealth();
@@ -814,10 +819,12 @@ class Game {
         // Your own turn is played over your shoulder; the opponent's is watched
         // from in front of them, so you see the bow come up and the draw build.
         view = {
-          kind: mine ? 'shoulder' : 'front',
+          kind: mine ? 'shoulder' : 'approach',
           seat,
           origin: this.cameraOrigin,
-          facing: facingOf(seat),
+          // Always the VIEWER's facing: the approach flies down your own sight
+          // line toward the opponent instead of swinging around behind them.
+          facing: facingOf(this.mySeat),
           pitch: mine ? this.aim.pitch : this.opponentPitch,
         };
         this.sunAnchor.set(archer.pos.x, 0, archer.pos.z + 20 * facingOf(seat));

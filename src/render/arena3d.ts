@@ -28,6 +28,8 @@ export class ArenaView {
   private trailCount = 0;
 
   private arrow: THREE.Object3D | null = null;
+  /** Arrows left standing where they landed, oldest first. */
+  private readonly stuck: THREE.Object3D[] = [];
   private readonly aimTarget = new THREE.Vector3();
   private disposables: Array<{ dispose(): void }> = [];
 
@@ -189,6 +191,7 @@ export class ArenaView {
   private clearSet(): void {
     const doomed = this.group.children.filter((child) => child.userData.set === true);
     for (const child of doomed) this.group.remove(child);
+    this.stuck.length = 0;
   }
 
   /** Short tracer showing launch direction only, like the original. */
@@ -234,6 +237,38 @@ export class ArenaView {
   hideArrow(): void {
     if (this.arrow) this.arrow.visible = false;
     this.trail.visible = false;
+  }
+
+  /**
+   * Leave an arrow standing where this one landed.
+   *
+   * A shot that vanishes on impact gives the player nothing to read; a shaft
+   * sticking out of the ground (or the target) shows exactly how far off the
+   * last attempt was, which is how you walk the next one in.
+   */
+  stickArrow(point: Vec3, previous: Vec3 | null): void {
+    if (!this.arrow) return;
+    const shaft = this.arrow.clone(true);
+    shaft.visible = true;
+    shaft.frustumCulled = false;
+    shaft.userData.set = true;
+    shaft.position.set(point.x, point.y, point.z);
+    if (previous) {
+      this.aimTarget.set(
+        point.x + (point.x - previous.x),
+        point.y + (point.y - previous.y),
+        point.z + (point.z - previous.z),
+      );
+      shaft.lookAt(this.aimTarget);
+    }
+    this.group.add(shaft);
+    this.stuck.push(shaft);
+
+    // Keep the field readable rather than a pincushion.
+    while (this.stuck.length > 8) {
+      const oldest = this.stuck.shift();
+      if (oldest) this.group.remove(oldest);
+    }
   }
 
   pushTrail(point: Vec3): void {

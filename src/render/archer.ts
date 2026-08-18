@@ -1,15 +1,21 @@
 /**
- * One archer, with a small animation state machine driving a rigged skeleton.
+ * One archer.
  *
- *   idle      slow sway and breathing
- *   aiming    bow arm locks onto the aim line, string hand draws to the jaw
- *   release   string hand snaps forward, bow kicks, body follows through
- *   knocked   a hit knocks the archer flat, then they push back up
+ * Everything animated here is a transform on a group the game owns — the bow
+ * pivot, the torso, the root. Nothing reaches into the skeleton.
  *
- * The arms are posed with two-bone IK against world-space targets rather than
- * with hand-authored bone rotations. These skeletons come from an auto-rigger,
- * so the bind pose is not knowable in advance; IK reads each bone's own axis
- * from the rig and puts the hand where it is told regardless.
+ * That is deliberate. An earlier version posed the arms with IK against the
+ * auto-rigged skeleton, and the result was a scrambled figure where the hand,
+ * bow and arrow could not be told apart. Bending someone else's rig blind is a
+ * bad trade: the motion it buys is small, and when it goes wrong it destroys
+ * the silhouette, which is the one thing the player actually reads. So the
+ * character mesh keeps its rest pose and the readable motion lives in:
+ *
+ *   aim      the bow tilts to the elevation being dialled
+ *   draw     the bow pushes out and up as the string is pulled, torso leans back
+ *   release  the bow snaps back toward the body, then settles
+ *   knocked  the archer falls backwards, lies a beat, then gets up in two
+ *            stages the way a person does — up onto a knee, then to their feet
  *
  * Everything hangs off `facingGroup`, inside which local +z is always
  * "down-range".
@@ -17,33 +23,23 @@
 
 import * as THREE from 'three';
 
-import { solveTwoBone } from './ik';
 import { instantiate } from './models';
 import type { ModelKey } from './models';
 
-/** Where the bow sits when there is no skeleton to attach it to. */
-const LOOSE_BOW_HAND = new THREE.Vector3(0.26, 1.34, 0.44);
+/** Bow position at rest and at full draw, relative to the archer's feet. */
+const BOW_REST = new THREE.Vector3(0.24, 1.16, 0.26);
+const BOW_DRAWN = new THREE.Vector3(0.28, 1.4, 0.52);
 
-const FALL_SECONDS = 0.32;
-const DOWN_SECONDS = 0.55;
-const RISE_SECONDS = 0.75;
-const KNOCKED_TOTAL = FALL_SECONDS + DOWN_SECONDS + RISE_SECONDS;
+const FALL_SECONDS = 0.3;
+const DOWN_SECONDS = 0.5;
+const KNEE_SECONDS = 0.32;
+const STAND_SECONDS = 0.5;
+const KNOCKED_TOTAL = FALL_SECONDS + DOWN_SECONDS + KNEE_SECONDS + STAND_SECONDS;
 
-/** Small lean/twist offsets, applied as deltas from each bone's rest pose. */
-interface TorsoDelta {
-  bone: string;
-  base?: [number, number, number];
-  draw?: [number, number, number];
-  pitch?: [number, number, number];
-}
-
-const TORSO: TorsoDelta[] = [
-  { bone: 'Spine', base: [0, 0.1, 0], draw: [-0.06, 0.04, 0], pitch: [-0.16, 0, 0] },
-  { bone: 'Spine01', base: [0, 0.08, 0], draw: [-0.04, 0.03, 0], pitch: [-0.1, 0, 0] },
-  { bone: 'Spine02', base: [0, 0.06, 0], draw: [-0.02, 0.02, 0], pitch: [-0.06, 0, 0] },
-  { bone: 'neck', base: [0, -0.08, 0], draw: [0.03, -0.04, 0], pitch: [0.1, 0, 0] },
-  { bone: 'Head', base: [0, -0.1, 0], draw: [0.02, -0.04, 0], pitch: [0.1, 0, 0] },
-];
+/** How far over the archer goes when flat out, in radians. */
+const FLAT_ANGLE = 1.5;
+/** Half-way pose while pushing back up onto a knee. */
+const KNEE_ANGLE = 0.55;
 
 export interface ArcherVisualOptions {
   model: ModelKey;
@@ -57,13 +53,10 @@ export class ArcherRig {
   readonly group = new THREE.Group();
 
   private readonly facingGroup = new THREE.Group();
-  private readonly aimPivot = new THREE.Group();
+  private readonly bowPivot = new THREE.Group();
   private readonly bodyPivot = new THREE.Group();
 
   private character: THREE.Object3D | null = null;
-  private readonly bones = new Map<string, THREE.Bone>();
-  private readonly restRotations = new Map<string, THREE.Quaternion>();
-  private rigged = false;
 
   private drawAmount = 0;
   private smoothedDraw = 0;
@@ -73,27 +66,18 @@ export class ArcherRig {
   private recoil = 0;
   private knockedFor = -1;
   private breathePhase = Math.random() * Math.PI * 2;
-  private swayPhase = Math.random() * Math.PI * 2;
-
-  private readonly scratchEuler = new THREE.Euler();
-  private readonly scratchQuat = new THREE.Quaternion();
-  private readonly bowTarget = new THREE.Vector3();
-  private readonly drawTarget = new THREE.Vector3();
-  private readonly poleA = new THREE.Vector3();
-  private readonly poleB = new THREE.Vector3();
 
   constructor(options: ArcherVisualOptions) {
     this.facingGroup.rotation.y = options.facing === 1 ? 0 : Math.PI;
     this.group.add(this.facingGroup);
     this.facingGroup.add(this.bodyPivot);
 
-    this.aimPivot.position.copy(LOOSE_BOW_HAND);
-    this.facingGroup.add(this.aimPivot);
+    this.bowPivot.position.copy(BOW_REST);
+    this.facingGroup.add(this.bowPivot);
   }
 
   async load(options: ArcherVisualOptions): Promise<void> {
-    // No separate arrow: the bow mesh is modelled with one already nocked, and
-    // attaching another put two arrows on the bow.
+    // No separate arrow: the bow mesh is modelled with one already nocked.
     const [character, bow, quiver] = await Promise.all([
       instantiate(options.model),
       instantiate('bow'),
@@ -102,31 +86,20 @@ export class ArcherRig {
 
     this.character = character;
     this.bodyPivot.add(character);
-    this.collectBones(character);
     if (options.tint !== undefined) this.applyTint(character, options.tint);
 
-    const hand = this.bones.get('LeftHand');
-    if (hand) {
-      this.rigged = true;
-      // Parent the bow to the hand so the two can never drift apart. The hand
-      // bone lives inside the scaled rig, so undo that scale on the way in.
-      const holder = new THREE.Group();
-      const scale = hand.getWorldScale(new THREE.Vector3()).x;
-      holder.scale.setScalar(scale > 0 ? 1 / scale : 1);
-      holder.add(bow);
-      bow.position.set(0, 0.06, 0.06);
-      hand.add(holder);
-      this.aimPivot.visible = false;
-    } else {
-      this.aimPivot.add(bow);
-    }
+    this.bowPivot.add(bow);
 
-    quiver.position.set(-0.2, 0.95, -0.14);
-    quiver.rotation.set(0.22, 0, 0.3);
+    quiver.position.set(-0.22, 0.95, -0.16);
+    quiver.rotation.set(0.22, 0, 0.32);
     this.bodyPivot.add(quiver);
   }
 
-  /** Clone materials before tinting so the two archers stay independent. */
+  /**
+   * Clone materials before tinting so the two archers stay independent, and
+   * keep the blend light — a heavy tint flattens the texture into a blob and
+   * the bow stops standing out from the body.
+   */
   private applyTint(root: THREE.Object3D, tint: number): void {
     const colour = new THREE.Color(tint);
     root.traverse((child) => {
@@ -135,19 +108,10 @@ export class ArcherRig {
       const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       const cloned = list.map((material) => {
         const copy = (material as THREE.MeshStandardMaterial).clone();
-        copy.color.lerp(colour, 0.5);
+        copy.color.lerp(colour, 0.28);
         return copy;
       });
       mesh.material = Array.isArray(mesh.material) ? cloned : cloned[0];
-    });
-  }
-
-  private collectBones(root: THREE.Object3D): void {
-    root.traverse((child) => {
-      const bone = child as THREE.Bone;
-      if (!bone.isBone) return;
-      this.bones.set(bone.name, bone);
-      this.restRotations.set(bone.name, bone.quaternion.clone());
     });
   }
 
@@ -169,7 +133,7 @@ export class ArcherRig {
     // The bow carries its own arrow; nothing to show or hide.
   }
 
-  /** Take a hit: stagger, go down, then get back up. */
+  /** Take a hit: fall backwards, lie a beat, then get back up. */
   knockDown(): void {
     this.flashUntil = performance.now() + 340;
     this.knockedFor = 0;
@@ -184,73 +148,40 @@ export class ArcherRig {
     this.flashUntil = performance.now() + 340;
   }
 
-  private applyTorso(draw: number, pitchAmount: number): void {
-    for (const delta of TORSO) {
-      const bone = this.bones.get(delta.bone);
-      const rest = this.restRotations.get(delta.bone);
-      if (!bone || !rest) continue;
-      const base = delta.base ?? [0, 0, 0];
-      const drawTerm = delta.draw ?? [0, 0, 0];
-      const pitchTerm = delta.pitch ?? [0, 0, 0];
-      this.scratchEuler.set(
-        base[0] + drawTerm[0] * draw + pitchTerm[0] * pitchAmount,
-        base[1] + drawTerm[1] * draw + pitchTerm[1] * pitchAmount,
-        base[2] + drawTerm[2] * draw + pitchTerm[2] * pitchAmount,
-      );
-      this.scratchQuat.setFromEuler(this.scratchEuler);
-      bone.quaternion.copy(rest).multiply(this.scratchQuat);
-    }
-  }
-
-  private poseArms(draw: number, sway: number, down: number): void {
-    const bowArm = this.bones.get('LeftArm');
-    const bowForearm = this.bones.get('LeftForeArm');
-    const drawArm = this.bones.get('RightArm');
-    const drawForearm = this.bones.get('RightForeArm');
-    if (!bowArm || !bowForearm || !drawArm || !drawForearm) return;
-
-    const sin = Math.sin(this.pitch);
-    const cos = Math.cos(this.pitch);
-
-    // Bow hand: out at arm's length along the aim line, so raising the
-    // elevation visibly lifts the whole bow arm. While down, both arms fall in
-    // toward the body instead of holding a bow up at nothing.
-    this.bowTarget.set(
-      0.16 + sway * 0.4,
-      THREE.MathUtils.lerp(1.36 + sin * 0.62, 0.75, down),
-      THREE.MathUtils.lerp(0.48 * cos + 0.12, 0.12, down),
-    );
-    // String hand: at the jaw, sliding back as the draw builds.
-    this.drawTarget.set(
-      -0.13,
-      THREE.MathUtils.lerp(1.5 + sin * 0.5, 0.8, down),
-      THREE.MathUtils.lerp(0.2 - draw * 0.34, -0.1, down),
-    );
-
-    this.facingGroup.localToWorld(this.bowTarget);
-    this.facingGroup.localToWorld(this.drawTarget);
-
-    // Elbow hints: the bow elbow rolls down and out, the string elbow stays
-    // high — the classic archery silhouette.
-    this.poleA.set(0.9, 0.4, 0.3);
-    this.poleB.set(-0.7, 1.7, -0.6);
-    this.facingGroup.localToWorld(this.poleA);
-    this.facingGroup.localToWorld(this.poleB);
-
-    solveTwoBone(bowArm, bowForearm, this.bowTarget, this.poleA);
-    solveTwoBone(drawArm, drawForearm, this.drawTarget, this.poleB);
-  }
-
-  /** 0 while upright, 1 flat on the ground. */
-  private knockdownAmount(elapsed: number): number {
+  /**
+   * Body angle through a knockdown, in radians of backward lean.
+   *
+   * Shaped like a person rather than a hinge: the fall accelerates and
+   * overshoots as the body slaps down, there is a beat on the ground, then the
+   * recovery comes in two pushes — up onto a knee, a moment to gather, and up
+   * onto the feet.
+   */
+  private knockdownAngle(elapsed: number): number {
     if (elapsed < FALL_SECONDS) {
       const t = elapsed / FALL_SECONDS;
-      return t * t; // accelerating fall
+      // Accelerate over, then a little overshoot as the shoulders land.
+      return FLAT_ANGLE * (t * t) * (1 + 0.12 * Math.sin(Math.PI * t));
     }
-    if (elapsed < FALL_SECONDS + DOWN_SECONDS) return 1;
-    const t = (elapsed - FALL_SECONDS - DOWN_SECONDS) / RISE_SECONDS;
-    // Ease out of the rise so standing up settles instead of snapping.
-    return 1 - t * t * (3 - 2 * t);
+
+    const afterFall = elapsed - FALL_SECONDS;
+    if (afterFall < DOWN_SECONDS) {
+      // Settle out of the overshoot and lie still.
+      const t = afterFall / DOWN_SECONDS;
+      return FLAT_ANGLE * (1 + 0.06 * Math.cos(t * Math.PI * 3) * (1 - t));
+    }
+
+    const afterDown = afterFall - DOWN_SECONDS;
+    if (afterDown < KNEE_SECONDS) {
+      // First push: shoulders come up, hips still down.
+      const t = afterDown / KNEE_SECONDS;
+      const eased = t * t * (3 - 2 * t);
+      return FLAT_ANGLE + (KNEE_ANGLE - FLAT_ANGLE) * eased;
+    }
+
+    // Second push: onto the feet, slowing as they straighten up.
+    const t = Math.min(1, (afterDown - KNEE_SECONDS) / STAND_SECONDS);
+    const eased = 1 - (1 - t) * (1 - t);
+    return KNEE_ANGLE * (1 - eased);
   }
 
   update(nowMs: number, deltaSeconds = 1 / 60): void {
@@ -264,45 +195,32 @@ export class ArcherRig {
     // Ease the draw so releasing snaps rather than teleports.
     this.smoothedDraw += (this.drawAmount - this.smoothedDraw) * Math.min(1, dt * 14);
     this.breathePhase += dt * 1.9;
-    this.swayPhase += dt * 0.7;
 
-    const down = this.knockedFor >= 0 ? this.knockdownAmount(this.knockedFor) : 0;
+    const angle = this.knockedFor >= 0 ? this.knockdownAngle(this.knockedFor) : 0;
+    const down = Math.min(1, angle / FLAT_ANGLE);
 
-    // Root: fall backwards about the feet, and drop as the body goes over.
-    this.facingGroup.rotation.x = -down * 1.42;
-    this.facingGroup.position.y = -down * 0.12;
+    // Root: rotate about the feet, and sink as the body goes over.
+    this.facingGroup.rotation.x = -angle;
+    this.facingGroup.position.y = -down * 0.1;
 
-    if (this.recoil > 0) {
-      this.recoil = Math.max(0, this.recoil - dt * 5.5);
-      const kick = this.recoil * 0.09;
-      if (this.rigged) this.facingGroup.position.z = -kick;
-      else this.aimPivot.position.z = LOOSE_BOW_HAND.z - kick;
-    }
+    if (this.recoil > 0) this.recoil = Math.max(0, this.recoil - dt * 5.5);
 
-    if (this.rigged) {
-      // Idle sway fades out as the shot is drawn and while flat on the ground.
-      const settled = (1 - this.smoothedDraw * 0.8) * (1 - down);
-      const sway = Math.sin(this.swayPhase) * 0.035 * settled;
-      const pitchAmount = Math.max(-0.3, Math.min(1, this.pitch / 0.79));
+    // Bow: rides from the rest carry to the drawn, extended position, tilts to
+    // the elevation, and kicks back toward the body on release.
+    const extend = this.smoothedDraw * (1 - down);
+    const kick = this.recoil * 0.16;
+    this.bowPivot.position.set(
+      THREE.MathUtils.lerp(BOW_REST.x, BOW_DRAWN.x, extend),
+      THREE.MathUtils.lerp(BOW_REST.y, BOW_DRAWN.y, extend) - down * 0.35,
+      THREE.MathUtils.lerp(BOW_REST.z, BOW_DRAWN.z, extend) - kick,
+    );
+    // Held low and level until the shot is being lined up, then swung onto the
+    // aim line — so raising the elevation is visible on the bow itself.
+    this.bowPivot.rotation.x = -this.pitch * (0.35 + 0.65 * extend);
 
-      this.applyTorso(this.smoothedDraw, pitchAmount * (1 - down));
-
-      const hips = this.bones.get('Hips');
-      const hipsRest = this.restRotations.get('Hips');
-      if (hips && hipsRest) {
-        const breathe = Math.sin(this.breathePhase) * 0.022 * settled;
-        this.scratchEuler.set(breathe, sway * 0.6, sway * 0.4);
-        this.scratchQuat.setFromEuler(this.scratchEuler);
-        hips.quaternion.copy(hipsRest).multiply(this.scratchQuat);
-      }
-
-      // The torso moved the shoulders, so refresh before solving the arms.
-      this.group.updateWorldMatrix(true, true);
-      this.poseArms(this.smoothedDraw, sway, down);
-    } else {
-      this.aimPivot.rotation.set(-this.pitch, 0, 0);
-      this.bodyPivot.rotation.x = -this.smoothedDraw * 0.05;
-    }
+    // Torso: leans back into the draw, breathes while idle.
+    const settled = (1 - this.smoothedDraw * 0.8) * (1 - down);
+    this.bodyPivot.rotation.x = -extend * 0.13 + Math.sin(this.breathePhase) * 0.012 * settled;
 
     const flashing = nowMs < this.flashUntil;
     if (!this.character || (!flashing && !this.wasFlashing)) {
