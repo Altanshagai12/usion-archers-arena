@@ -146,8 +146,7 @@ function target(): THREE.Group {
 const SIMPLE: Partial<Record<ModelKey, () => THREE.Object3D>> = {
   fence,
   target,
-  archer_a: () => archer(0xb03a3a),
-  archer_b: () => archer(0x2f5fa8),
+  archer_mx: () => archer(0x9aa0a6),
   bow,
   arrow,
   tree,

@@ -242,7 +242,7 @@ class Game {
         onCancel: () => this.cancelAim(),
       });
 
-      await preload(['archer_hero', 'bow', 'arrow', 'quiver']);
+      await preload(['archer_mx', 'bow', 'arrow', 'quiver']);
       requestAnimationFrame(this.frame);
     } catch (error) {
       // Losing the renderer must not take the menu down with it.
@@ -553,7 +553,7 @@ class Game {
         // A properly rigged CC0 character with authored clips — idle, aim,
         // shoot, hit and death. Its own animation does the acting; nothing
         // here poses bones by hand.
-        model: 'archer_hero' as ModelKey,
+        model: 'archer_mx' as ModelKey,
         facing: facingOf(seat),
         tint: seat === 0 ? 0xd6503f : 0x3f6ed6,
       };

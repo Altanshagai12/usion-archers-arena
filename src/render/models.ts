@@ -16,10 +16,7 @@ import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.j
 import { fallbackModel } from './fallback';
 
 export type ModelKey =
-  | 'archer_hero'
-  | 'archer_rigged'
-  | 'archer_a'
-  | 'archer_b'
+  | 'archer_mx'
   | 'bow'
   | 'arrow'
   | 'quiver'
@@ -61,10 +58,7 @@ const HELD_IN_HAND: ReadonlySet<ModelKey> = new Set<ModelKey>(['bow', 'arrow']);
 
 /** Target size in metres for each model, applied after normalisation. */
 const TARGET_HEIGHT: Record<ModelKey, number> = {
-  archer_hero: 1.78,
-  archer_rigged: 1.78,
-  archer_a: 1.78,
-  archer_b: 1.78,
+  archer_mx: 1.78,
   bow: 1.08,
   arrow: 0.78,
   quiver: 0.56,
@@ -204,6 +198,34 @@ export async function loadModel(key: ModelKey): Promise<THREE.Group> {
  */
 export function animationsFor(key: ModelKey): THREE.AnimationClip[] {
   return clips.get(key) ?? [];
+}
+
+const clipFiles = new Map<string, Promise<THREE.AnimationClip[]>>();
+
+/**
+ * Load a clip-only .glb — a skeleton and one animation, no character.
+ *
+ * The Mixamo exports all share one skeleton, so a clip taken from one file
+ * plays on the character from another: three binds clips by node name. Keeping
+ * the extra clips in their own files ships the character mesh once instead of
+ * three times.
+ *
+ * Never rejects: a missing clip costs an animation, not the match.
+ */
+export async function loadClips(name: string): Promise<THREE.AnimationClip[]> {
+  const existing = clipFiles.get(name);
+  if (existing) return existing;
+
+  const promise = loader
+    .loadAsync(`${BASE_URL}${name}.glb`)
+    .then((gltf) => gltf.animations ?? [])
+    .catch((error) => {
+      console.warn(`[archers-arena] clips "${name}" unavailable`, error);
+      return [] as THREE.AnimationClip[];
+    });
+
+  clipFiles.set(name, promise);
+  return promise;
 }
 
 /**

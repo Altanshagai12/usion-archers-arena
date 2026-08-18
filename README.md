@@ -89,9 +89,13 @@ contract only; no game code lives in the platform repo.
 
 ## Credits
 
-The archer character is **Medieval** by *dook*, released **CC0** and fetched
-from [Poly Pizza](https://poly.pizza/m/y9KWOVG21R). It ships with the authored
-clips the game plays: idle, aiming, shoot, hit and death.
+The archer and its animation come from **Mixamo** (Adobe) — the character plus
+three clips: *Standing Draw Arrow*, *Standing Aim Overdraw* and *Standing Death
+Right 02*. The FBX exports are not committed; `npm run assets:mixamo` converts
+them from a local folder (`MIXAMO_DIR`, default `~/Downloads`) into
+`assets_raw/`.
+
+They arrive with no materials, so the game colours the character per seat.
 
 Everything else (bow, arrow, quiver, trees, rocks, walls, towers, columns,
 banners, crates) was generated with Higgsfield and lives in `assets_raw/`.
