@@ -31,14 +31,6 @@ export interface ScenePalette {
   ambient: number;
 }
 
-export interface CameraShot {
-  /** Feet position of the archer we are standing behind. */
-  origin: THREE.Vector3;
-  /** +1 shoots toward +z, -1 toward -z. */
-  facing: 1 | -1;
-  pitch: number;
-}
-
 export interface SceneHandles {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
@@ -46,7 +38,8 @@ export interface SceneHandles {
   root: THREE.Group;
   sun: THREE.DirectionalLight;
   setPalette(palette: ScenePalette): void;
-  placeCamera(shot: CameraShot): void;
+  /** Where the camera sits, what it looks at, and where to centre the shadows. */
+  setCamera(eye: THREE.Vector3, focus: THREE.Vector3, sunAnchor: THREE.Vector3): void;
   render(): void;
   dispose(): void;
 }
@@ -108,13 +101,6 @@ function makeSkyTexture(top: number, bottom: number): THREE.Texture {
   texture.minFilter = THREE.LinearFilter;
   return texture;
 }
-
-/** Over-the-shoulder offsets, in metres, relative to the archer's feet. */
-const EYE_BACK = 4.4;
-const EYE_UP = 2.5;
-const EYE_SIDE = 0.5;
-const LOOK_AHEAD = 18;
-const LOOK_UP = 1.3;
 
 export function createScene(mount: HTMLElement, viewport: Viewport): SceneHandles {
   const renderer = new THREE.WebGLRenderer({
@@ -180,28 +166,18 @@ export function createScene(mount: HTMLElement, viewport: Viewport): SceneHandle
     ambient.groundColor.setHex(palette.ambient);
   };
 
-  const eye = new THREE.Vector3();
-  const focus = new THREE.Vector3();
-
-  const placeCamera = (shot: CameraShot): void => {
-    const { origin, facing, pitch } = shot;
-
-    // Sit behind and just off the archer's shoulder. Pitch lifts the look point
-    // so a high-angle shot shows more sky; there is no lateral aim to follow.
-    eye.set(origin.x + EYE_SIDE * facing, origin.y + EYE_UP, origin.z - EYE_BACK * facing);
-
-    focus.set(
-      origin.x,
-      origin.y + LOOK_UP + Math.sin(pitch) * 9,
-      origin.z + LOOK_AHEAD * facing,
-    );
-
+  // Where to look is decided by the camera director; this only applies it.
+  const setCamera = (
+    eye: THREE.Vector3,
+    focus: THREE.Vector3,
+    sunAnchor: THREE.Vector3,
+  ): void => {
     camera.position.copy(eye);
     camera.lookAt(focus);
 
     // Keep the shadow frustum over the action rather than the world origin.
-    sun.target.position.set(origin.x, 0, origin.z + 20 * facing);
-    sun.position.set(origin.x - 30, 46, origin.z + 20 * facing);
+    sun.target.position.set(sunAnchor.x, 0, sunAnchor.z);
+    sun.position.set(sunAnchor.x - 30, 46, sunAnchor.z);
     sun.target.updateMatrixWorld();
   };
 
@@ -222,7 +198,7 @@ export function createScene(mount: HTMLElement, viewport: Viewport): SceneHandle
     root,
     sun,
     setPalette,
-    placeCamera,
+    setCamera,
     render: () => renderer.render(scene, camera),
     dispose: () => {
       observer.disconnect();

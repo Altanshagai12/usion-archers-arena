@@ -32,6 +32,8 @@ import {
 import type { Profile, UpgradeTrack } from './progression';
 import { ArcherRig } from './render/archer';
 import { ArenaView } from './render/arena3d';
+import { CameraDirector } from './render/camera';
+import type { ViewRequest } from './render/camera';
 import { preload } from './render/models';
 import type { ModelKey } from './render/models';
 import { createScene, isWebGLAvailable, waitForViewport } from './render/scene';
@@ -96,7 +98,11 @@ class Game {
   private playback: Playback | null = null;
   private aim: ShotInput = { pitch: 0.25, power: 0.5 };
   private remoteAim: { seat: Seat; pitch: number } | null = null;
+  private readonly cameraDirector = new CameraDirector();
   private readonly cameraOrigin = new THREE.Vector3();
+  private readonly sunAnchor = new THREE.Vector3();
+  private readonly arrowAt = new THREE.Vector3();
+  private readonly arrowHeading = new THREE.Vector3();
   private lastFrameAt = 0;
 
   constructor() {
@@ -504,14 +510,12 @@ class Game {
     const archers = archersFor(this.state);
     for (const seat of [0, 1] as Seat[]) {
       const options = {
-        // Only the archer we stand behind is rigged and animated — the other
-        // is 30-75 m away, where a skeleton would cost frames for nothing.
-        model: (seat === this.mySeat
-          ? 'archer_rigged'
-          : seat === 0
-            ? 'archer_a'
-            : 'archer_b') as ModelKey,
+        // Both archers are rigged now that the camera travels to whoever is
+        // shooting — the opponent is watched up close too. One mesh serves
+        // both, tinted apart, because only this one auto-rigs cleanly.
+        model: 'archer_rigged' as ModelKey,
         facing: facingOf(seat),
+        tint: seat === 0 ? 0xd6503f : 0x3f6ed6,
       };
       const rig = new ArcherRig(options);
       await rig.load(options);
@@ -523,6 +527,7 @@ class Game {
     const opponentName = this.vsBot ? 'Bot' : t('hud.opponent');
     this.hud.setNames(t('hud.you'), opponentName);
     this.refreshHealth();
+    this.cameraDirector.snap();
   }
 
   private refreshHealth(): void {
@@ -605,7 +610,7 @@ class Game {
       () => {
         this.playback = null;
         this.arenaView.hideArrow();
-        if (zone) this.rigs[seat === 0 ? 1 : 0]?.flashHit();
+        if (zone) this.rigs[seat === 0 ? 1 : 0]?.knockDown();
         this.hud.showShotResult(zone, damage, blocked);
         this.refreshHealth();
 
@@ -728,25 +733,45 @@ class Game {
       this.rigs[this.remoteAim.seat]?.setDraw(0.7);
     }
 
+    let followingArrow = false;
     if (this.playback) {
       const elapsed = ((now - this.playback.startedAt) / 1000) * PLAYBACK_SPEED;
       const index = Math.min(this.playback.path.length - 1, Math.floor(elapsed * 120));
       const point = this.playback.path[index];
+      const before = this.playback.path[Math.max(0, index - 1)] ?? null;
       if (point) {
-        this.arenaView.setArrow(point, this.playback.path[Math.max(0, index - 1)] ?? null);
+        this.arenaView.setArrow(point, before);
         if (index % 3 === 0) this.arenaView.pushTrail(point);
+        this.arrowAt.set(point.x, point.y, point.z);
+        this.arrowHeading.set(
+          point.x - (before?.x ?? point.x),
+          point.y - (before?.y ?? point.y),
+          point.z - (before?.z ?? point.z),
+        );
+        followingArrow = true;
       }
     }
 
     if (this.state.started) {
       const archers = archersFor(this.state);
-      const me = archers[this.mySeat];
-      this.cameraOrigin.set(me.pos.x, me.pos.y, me.pos.z);
-      scene.placeCamera({
-        origin: this.cameraOrigin,
-        facing: facingOf(this.mySeat),
-        pitch: this.aim.pitch,
-      });
+      let view: ViewRequest;
+
+      if (followingArrow) {
+        view = { kind: 'flight', at: this.arrowAt, heading: this.arrowHeading };
+        this.sunAnchor.copy(this.arrowAt);
+      } else {
+        // Stand behind whoever is about to shoot, so the opponent's turn is
+        // watched from their shoulder rather than from across the range.
+        const seat: Seat = this.state.over ? this.mySeat : this.state.turn;
+        const archer = archers[seat];
+        this.cameraOrigin.set(archer.pos.x, archer.pos.y, archer.pos.z);
+        const pitch = seat === this.mySeat ? this.aim.pitch : (this.remoteAim?.pitch ?? 0.25);
+        view = { kind: 'shoulder', origin: this.cameraOrigin, facing: facingOf(seat), pitch };
+        this.sunAnchor.set(archer.pos.x, 0, archer.pos.z + 20 * facingOf(seat));
+      }
+
+      const placement = this.cameraDirector.update(view, dt);
+      scene.setCamera(placement.eye, placement.focus, this.sunAnchor);
     }
 
     scene.render();
