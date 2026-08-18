@@ -45,7 +45,12 @@ const PROCEDURAL_ONLY: ReadonlySet<ModelKey> = new Set<ModelKey>(['fence', 'targ
  * that to 0.78 m of *height* blew it up to the size of a tree. Elongated props
  * are fitted on their longest axis instead.
  */
-const FIT_LONGEST_AXIS: ReadonlySet<ModelKey> = new Set<ModelKey>(['arrow']);
+const LONG_AXIS_ALIGN: Partial<Record<ModelKey, 'y' | 'z'>> = {
+  // The arrow points where it flies.
+  arrow: 'z',
+  // The bow stands upright in the hand; its model lies on its side.
+  bow: 'y',
+};
 
 /**
  * Models held in a hand rather than stood on the ground.
@@ -86,9 +91,10 @@ const pending = new Map<ModelKey, Promise<THREE.Group>>();
 function normalise(
   root: THREE.Object3D,
   targetHeight: number,
-  fitLongest: boolean,
+  align: 'y' | 'z' | null,
   centred: boolean,
 ): THREE.Group {
+  const fitLongest = align !== null;
   const wrapper = new THREE.Group();
 
   const box = new THREE.Box3().setFromObject(root);
@@ -100,14 +106,31 @@ function normalise(
   const reference = fitLongest ? Math.max(size.x, size.y, size.z) : size.y;
   const scale = targetHeight / (reference || 1);
 
-  // Elongated models are generated lying along an arbitrary axis. Turn the long
-  // axis to +z so callers can treat "the arrow points +z" as a fact instead of
-  // guessing per model — guessing is what left the nocked arrow pointing
-  // sideways across the archer's chest.
-  let axisFix: THREE.Euler | null = null;
-  if (fitLongest) {
-    if (size.x >= size.y && size.x >= size.z) axisFix = new THREE.Euler(0, -Math.PI / 2, 0);
-    else if (size.y >= size.x && size.y >= size.z) axisFix = new THREE.Euler(Math.PI / 2, 0, 0);
+  // Elongated models arrive lying along whatever axis they were modelled on.
+  // Turning them into a known pose lets callers treat "the arrow points +z" and
+  // "the bow stands upright, limbs curving down-range" as facts rather than
+  // per-model guesses: the longest axis goes to the requested one, and for an
+  // upright model the second-longest then goes down-range (+z) — a bow's limbs
+  // curve away from the archer, not out to the side.
+  let axisFix: THREE.Quaternion | null = null;
+  if (align) {
+    const longest =
+      size.x >= size.y && size.x >= size.z
+        ? new THREE.Vector3(1, 0, 0)
+        : size.y >= size.z
+          ? new THREE.Vector3(0, 1, 0)
+          : new THREE.Vector3(0, 0, 1);
+    const target = align === 'y' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+    axisFix = new THREE.Quaternion().setFromUnitVectors(longest, target);
+
+    if (align === 'y') {
+      const turned = size.clone().applyQuaternion(axisFix);
+      if (Math.abs(turned.x) > Math.abs(turned.z)) {
+        axisFix.premultiply(
+          new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2),
+        );
+      }
+    }
   }
 
   // Standing props are centred on their footprint and dropped onto y = 0.
@@ -122,7 +145,7 @@ function normalise(
 
   if (axisFix) {
     const oriented = new THREE.Group();
-    oriented.rotation.copy(axisFix);
+    oriented.quaternion.copy(axisFix);
     oriented.add(scaler);
     wrapper.add(oriented);
   } else {
@@ -175,7 +198,7 @@ export async function loadModel(key: ModelKey): Promise<THREE.Group> {
       const normalised = normalise(
         gltf.scene,
         TARGET_HEIGHT[key],
-        FIT_LONGEST_AXIS.has(key),
+        LONG_AXIS_ALIGN[key] ?? null,
         HELD_IN_HAND.has(key),
       );
       cache.set(key, normalised);

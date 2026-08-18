@@ -23,6 +23,11 @@
  * orientation set here — upright and square to the lane. Inheriting the hand's
  * rotation left it hanging off the wrist at an angle.
  *
+ * The nocked arrow is a separate mesh riding the DRAWING hand, so it travels
+ * back with the string as the shot is pulled and springs away on release. The
+ * bow's own modelled string is hidden: it is rigid geometry that cannot move,
+ * which is exactly what made the draw look frozen.
+ *
  * Everything hangs off `facingGroup`, inside which local +z is always
  * "down-range".
  */
@@ -78,6 +83,12 @@ export class ArcherRig {
   private stringHand: THREE.Bone | null = null;
 
   private bow: THREE.Object3D | null = null;
+  private arrow: THREE.Object3D | null = null;
+  private readonly arrowPivot = new THREE.Group();
+  /** Nock to arrow centre, measured off the mesh. */
+  private arrowReach = 0.39;
+  /** True between loosing a shot and drawing the next one. */
+  private arrowGone = false;
   private stringLine: THREE.Line | null = null;
   /** Limb tips in the bow's OWN frame, measured before it is parented. */
   private readonly limbTop = new THREE.Vector3();
@@ -99,13 +110,14 @@ export class ArcherRig {
 
     this.bowPivot.position.copy(BOW_REST);
     this.facingGroup.add(this.bowPivot);
+    this.facingGroup.add(this.arrowPivot);
   }
 
   async load(options: ArcherVisualOptions): Promise<void> {
-    // No separate arrow: the bow mesh is modelled with one already nocked.
-    const [character, bow, quiver, aimClips, deathClips] = await Promise.all([
+    const [character, bow, arrow, quiver, aimClips, deathClips] = await Promise.all([
       instantiate(options.model),
       instantiate('bow'),
+      instantiate('arrow'),
       instantiate('quiver'),
       loadClips('anim_aim'),
       loadClips('anim_death'),
@@ -117,6 +129,7 @@ export class ArcherRig {
 
     this.setupAnimation(character, options.model, aimClips, deathClips);
     this.attachBow(character, bow);
+    this.attachArrow(arrow);
     this.attachQuiver(character, quiver);
   }
 
@@ -182,7 +195,7 @@ export class ArcherRig {
    */
   private attachBow(character: THREE.Object3D, bow: THREE.Object3D): void {
     this.bow = bow;
-    this.measureLimbs(bow);
+    this.prepareBow(bow);
     this.bowPivot.add(bow);
 
     if (this.drawAction && this.mixer) {
@@ -210,20 +223,85 @@ export class ArcherRig {
     this.mixer?.update(0);
   }
 
-  private measureLimbs(bow: THREE.Object3D): void {
+  /**
+   * Measure the limb tips and get rid of the bow's own string.
+   *
+   * The string modelled into the bow is rigid geometry — it cannot follow a
+   * draw no matter how well the archer is animated — but it is a very precise
+   * piece of geometry: hiding it costs nothing, and its own bounds give the
+   * exact tip-to-tip line for the string drawn in code, which beats guessing at
+   * a fraction of the bow's height.
+   *
+   * A strung bow also settles which way round the mesh is: the string sits on
+   * the archer's side and the grip is pushed out toward the target.
+   */
+  private prepareBow(bow: THREE.Object3D): void {
     // Measured BEFORE parenting: Box3.setFromObject returns world bounds, so
     // afterwards these would be the bow's position in the scene instead.
     bow.updateWorldMatrix(false, true);
-    const box = new THREE.Box3().setFromObject(bow);
+    const bounds = new THREE.Box3().setFromObject(bow);
     const size = new THREE.Vector3();
     const centre = new THREE.Vector3();
-    box.getSize(size);
-    box.getCenter(centre);
-    this.limbTop.set(centre.x, centre.y + size.y * 0.45, centre.z);
-    this.limbBottom.set(centre.x, centre.y - size.y * 0.45, centre.z);
+    bounds.getSize(size);
+    bounds.getCenter(centre);
+
+    const string = this.findModelledString(bow, size.y);
+    if (!string) {
+      this.limbTop.set(centre.x, centre.y + size.y * 0.45, centre.z);
+      this.limbBottom.set(centre.x, centre.y - size.y * 0.45, centre.z);
+      return;
+    }
+
+    const strung = new THREE.Box3().setFromObject(string);
+    const along = new THREE.Vector3();
+    strung.getCenter(along);
+    this.limbTop.set(along.x, strung.max.y, along.z);
+    this.limbBottom.set(along.x, strung.min.y, along.z);
+    string.visible = false;
+
+    // String on the far side of the grip means the mesh is back to front.
+    if (along.z > centre.z) bow.rotation.y = Math.PI;
   }
 
   /**
+   * The bow's own string: a needle of geometry running most of its height.
+   * Matched on shape rather than on a material name, so a replacement bow mesh
+   * is handled without editing this file.
+   */
+  private findModelledString(bow: THREE.Object3D, bowHeight: number): THREE.Mesh | null {
+    let found: THREE.Mesh | null = null;
+    const bounds = new THREE.Box3();
+    const size = new THREE.Vector3();
+    bow.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (found || !mesh.isMesh || !mesh.geometry) return;
+      bounds.setFromObject(mesh).getSize(size);
+      const dims = [size.x, size.y, size.z].sort((a, b) => b - a);
+      if (dims[0] >= bowHeight * 0.6 && dims[1] <= dims[0] * 0.08) found = mesh;
+    });
+    return found;
+  }
+
+  /**
+   * The nocked arrow.
+   *
+   * It hangs off its own pivot placed on the nock rather than being parented to
+   * the bow, because the nock is the DRAWING hand: the shaft has to travel back
+   * with the string as the shot is pulled, not sit welded to the grip.
+   */
+  private attachArrow(arrow: THREE.Object3D): void {
+    arrow.updateWorldMatrix(false, true);
+    const size = new THREE.Box3().setFromObject(arrow).getSize(new THREE.Vector3());
+    this.arrowReach = size.z / 2;
+    // The model points +z and is centred on itself, so half a length forward of
+    // the pivot puts its tail on the string.
+    arrow.position.set(0, 0, this.arrowReach);
+    this.arrowPivot.add(arrow);
+    this.arrow = arrow;
+  }
+
+  /**
+   * A bowstring that actually bends.  /**
    * A bowstring that actually bends.
    *
    * The string modelled into the bow mesh is a straight, rigid piece of
@@ -236,7 +314,7 @@ export class ArcherRig {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
     // Matches the bow so the string reads as part of it, not as an overlay.
-    const material = new THREE.LineBasicMaterial({ color: 0x8a5a2c });
+    const material = new THREE.LineBasicMaterial({ color: this.bowColour() });
     const line = new THREE.Line(geometry, material);
     line.frustumCulled = false;
     line.renderOrder = 6;
@@ -282,6 +360,34 @@ export class ArcherRig {
     positions.needsUpdate = true;
     line.geometry.computeBoundingSphere();
     line.visible = true;
+  }
+
+  /**
+   * The bow's own colour, sampled from its largest visible piece.
+   *
+   * Reading it off the mesh keeps the string matched to whatever bow is
+   * shipped. It is lifted slightly toward white because a taut string catches
+   * the light, and because the wood is dark enough to disappear at range.
+   */
+  private bowColour(): THREE.Color {
+    const colour = new THREE.Color(0x8a5a2c);
+    const bow = this.bow;
+    if (bow) {
+      let largest = -1;
+      bow.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        // The modelled string is already hidden by now, so it is never sampled.
+        if (!mesh.isMesh || !mesh.visible || !mesh.geometry) return;
+        const count = mesh.geometry.getAttribute('position')?.count ?? 0;
+        if (count <= largest) return;
+        const first = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+        const standard = first as THREE.MeshStandardMaterial | undefined;
+        if (!standard?.color) return;
+        largest = count;
+        colour.copy(standard.color);
+      });
+    }
+    return colour.lerp(new THREE.Color(0xffffff), 0.28);
   }
 
   /** Strap the quiver to the back so it rides the body, falls included. */
@@ -336,11 +442,13 @@ export class ArcherRig {
   release(): void {
     this.drawAmount = 0;
     this.recoil = 1;
+    this.arrowGone = true;
     if (this.phase === 'ready') this.loosing = true;
   }
 
+  /** Put a fresh arrow on the string. Idempotent. */
   nock(): void {
-    // The bow carries its own arrow; nothing to show or hide.
+    this.arrowGone = false;
   }
 
   /** Take a hit: go down with the death clip, then rise by reversing it. */
@@ -349,6 +457,8 @@ export class ArcherRig {
     this.drawAmount = 0;
     this.scrub = 0;
     this.loosing = false;
+    // Whoever gets back up is holding an arrow again.
+    this.arrowGone = false;
     this.phase = 'down';
     this.phaseTimer = 0;
 
@@ -412,6 +522,10 @@ export class ArcherRig {
       this.scrub += Math.sign(target - this.scrub) * step;
     }
 
+    // The hand stays empty after a shot until the next pull begins, which is
+    // also what re-arms an opponent nobody calls nock() for.
+    if (this.arrowGone && !this.loosing && this.drawAmount > 0) this.arrowGone = false;
+
     // Fully drawn, the overdraw loop takes over so a held shot still breathes.
     const wantAim = this.scrub > 0.97 && !this.loosing ? 1 : 0;
     this.aimBlend += (wantAim - this.aimBlend) * Math.min(1, dt * 5);
@@ -449,6 +563,20 @@ export class ArcherRig {
     }
     this.bowPivot.rotation.x = -this.pitch * 0.75;
     this.bowPivot.visible = this.phase === 'ready';
+
+    // The arrow rides the drawing hand, so it travels back with the string as
+    // the draw builds, and it lies along the elevation the shot will actually
+    // leave at rather than along the bow's damped tilt.
+    if (this.stringHand) {
+      this.stringHand.getWorldPosition(this.scratch);
+      this.facingGroup.worldToLocal(this.scratch);
+      this.arrowPivot.position.copy(this.scratch);
+    } else {
+      this.arrowPivot.position.copy(this.bowPivot.position);
+      this.arrowPivot.position.z -= this.arrowReach;
+    }
+    this.arrowPivot.rotation.x = -this.pitch;
+    this.arrowPivot.visible = this.arrow !== null && this.phase === 'ready' && !this.arrowGone;
 
     // The string is rebuilt last, once the bow and the hands have moved.
     this.group.updateWorldMatrix(true, true);
