@@ -18,8 +18,9 @@
  *   knocked   the death clip forward to go down, then the SAME clip in reverse
  *             to get back up — which reads as a person pushing themselves up
  *
- * The bow is parented to a wrist bone, so it follows the animated hand. Only
- * its tilt onto the aim line is driven from here.
+ * The bow takes its position from the animated bow hand but keeps an
+ * orientation set here — upright and square to the lane. Inheriting the hand's
+ * rifle-grip rotation left it hanging off the wrist at an angle.
  *
  * Everything hangs off `facingGroup`, inside which local +z is always
  * "down-range".
@@ -62,7 +63,8 @@ export class ArcherRig {
   private phase: Phase = 'idle';
   private phaseTimer = 0;
 
-  private bowHolder: THREE.Group | null = null;
+  /** Bone whose position the bow follows each frame. */
+  private bowHand: THREE.Bone | null = null;
 
   private drawAmount = 0;
   private smoothedDraw = 0;
@@ -72,6 +74,7 @@ export class ArcherRig {
   private recoil = 0;
 
   private readonly scratch = new THREE.Vector3();
+  private readonly scratchB = new THREE.Vector3();
 
   constructor(options: ArcherVisualOptions) {
     this.facingGroup.rotation.y = options.facing === 1 ? 0 : Math.PI;
@@ -183,24 +186,46 @@ export class ArcherRig {
     return found;
   }
 
-  /** Hang the bow off a wrist so it follows whatever the clip does. */
+  /**
+   * The bow follows the animated bow hand, but keeps an orientation this code
+   * controls.
+   *
+   * Parenting it rigidly to the wrist made it inherit the hand's rifle-grip
+   * rotation, so it hung off the wrist at an angle instead of being held. The
+   * character's clips are gun clips — the closest thing to a draw it owns — so
+   * the position is taken from the hand and the bow is kept upright and square
+   * to the lane by hand.
+   *
+   * Which wrist is the bow hand is measured from the aiming pose rather than
+   * assumed: the clip is sampled once at load and whichever wrist ends up
+   * further down-range is the one that supports the bow.
+   */
   private attachBow(character: THREE.Object3D, bow: THREE.Object3D): void {
-    const wrist = this.findBone(character, 'Wrist.L', 'LeftHand', 'Hand.L', 'Wrist.R');
+    this.bowPivot.add(bow);
 
-    if (!wrist) {
-      this.bowPivot.add(bow);
-      return;
+    const aim = this.actions.get('Idle_Gun_Pointing');
+    if (aim && this.mixer) {
+      aim.reset();
+      aim.play();
+      aim.time = aim.getClip().duration * 0.5;
+      this.mixer.update(0);
+    }
+    character.updateWorldMatrix(true, true);
+
+    const left = this.findBone(character, 'Wrist.L', 'LeftHand', 'Hand.L');
+    const right = this.findBone(character, 'Wrist.R', 'RightHand', 'Hand.R');
+
+    if (left && right) {
+      const leftZ = this.facingGroup.worldToLocal(left.getWorldPosition(this.scratch)).z;
+      const rightZ = this.facingGroup.worldToLocal(right.getWorldPosition(this.scratchB)).z;
+      this.bowHand = leftZ >= rightZ ? left : right;
+    } else {
+      this.bowHand = left ?? right;
     }
 
-    const holder = new THREE.Group();
-    // The wrist lives inside the scaled rig; undo that so the bow keeps the
-    // size it was normalised to.
-    const scale = wrist.getWorldScale(this.scratch).x;
-    holder.scale.setScalar(scale > 0 ? 1 / scale : 1);
-    holder.add(bow);
-    wrist.add(holder);
-    this.bowHolder = holder;
-    this.bowPivot.visible = false;
+    aim?.stop();
+    this.current = null;
+    this.play('Idle', 0);
   }
 
   private applyTint(root: THREE.Object3D, tint: number): void {
@@ -325,16 +350,23 @@ export class ArcherRig {
 
     this.advancePhase(dt);
     this.mixer?.update(dt);
+    // Bones moved; refresh world matrices before the bow reads the hand.
+    this.character?.updateWorldMatrix(true, true);
 
-    // Bow: follows the animated hand; only the aim tilt and kick come from here.
-    const target = this.bowHolder ?? this.bowPivot;
-    const down = this.isKnockedDown ? 1 : 0;
-    target.rotation.x = -this.pitch * 0.75 * (1 - down);
-    if (this.bowHolder) {
-      this.bowHolder.position.z = -this.recoil * 0.1;
+    // Bow: takes its POSITION from the animated hand so it is carried, raised
+    // and dropped with the body — but keeps an orientation set here, upright
+    // and square to the lane. Inheriting the hand's rifle-grip rotation is what
+    // left it hanging off the wrist at an angle instead of being held.
+    if (this.bowHand) {
+      this.bowHand.getWorldPosition(this.scratch);
+      this.facingGroup.worldToLocal(this.scratch);
+      this.bowPivot.position.copy(this.scratch);
+      this.bowPivot.position.z -= this.recoil * 0.1;
     } else {
+      this.bowPivot.position.copy(BOW_REST);
       this.bowPivot.position.z = BOW_REST.z - this.recoil * 0.12;
     }
+    this.bowPivot.rotation.x = -this.pitch * 0.75;
 
     const flashing = nowMs < this.flashUntil;
     if (!this.character || (!flashing && !this.wasFlashing)) {

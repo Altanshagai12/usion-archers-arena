@@ -16,9 +16,9 @@
 import * as THREE from 'three';
 
 /** Over-the-shoulder offsets, in metres, relative to the archer's feet. */
-const EYE_BACK = 4.4;
-const EYE_UP = 2.5;
-const EYE_SIDE = 0.5;
+const EYE_BACK = 6.2;
+const EYE_UP = 2.9;
+const EYE_SIDE = 1.6;
 const LOOK_AHEAD = 18;
 const LOOK_UP = 1.3;
 
