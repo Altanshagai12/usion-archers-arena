@@ -124,7 +124,7 @@ class Game {
       onSync: (data) => this.handleSync(data),
       onPlayerJoined: (roster) => this.handleRoster(roster),
       onPlayerLeft: (roster) => this.handlePlayerLeft(roster),
-      onRoomAssigned: (roomId) => void this.joinRoom(roomId),
+      onRoomAssigned: (roomId) => void this.joinRoom(roomId, true),
       onConnectionChange: (online) => this.hud?.setReconnecting(!online),
     });
   }
@@ -262,12 +262,25 @@ class Game {
 
   // ----------------------------------------------------------------- rooms
 
-  private async joinRoom(roomId: string): Promise<void> {
+  /**
+   * `alreadyJoined` is set when the room arrived through onRoomAssigned — the
+   * SDK has connected and joined it for us. Calling join again on a room we are
+   * already in fails, and the failure path used to drop the player back to the
+   * menu, so the share flow never got past waiting.
+   */
+  private async joinRoom(roomId: string, alreadyJoined = false): Promise<void> {
     this.vsBot = false;
     this.phase = 'waiting';
     this.menu.setVisible(false);
     this.hud.setVisible(true);
-    this.hud.setTurn(false, true);
+    this.hud.setTurn(false, true, this.net.roster.length || 1);
+
+    if (alreadyJoined) {
+      this.net.adoptRoom(roomId);
+      this.handleRoster(this.net.roster);
+      return;
+    }
+
     const joined = await this.net.connectAndJoin(roomId);
     if (joined) {
       this.handleRoster(this.net.roster);
@@ -297,7 +310,7 @@ class Game {
 
     if (roster.length < 2) {
       this.phase = 'waiting';
-      this.hud.setTurn(false, true);
+      this.hud.setTurn(false, true, roster.length);
       return;
     }
     if (this.state.started || this.readySent) {
@@ -609,7 +622,7 @@ class Game {
     const archers = archersFor(this.state);
     this.arenaView.showTracer(
       previewPath(arena, archers[this.mySeat], facingOf(this.mySeat), aim),
-      0xffffff,
+      0x5fd8ff,
     );
 
     const now = performance.now();

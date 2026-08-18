@@ -149,9 +149,15 @@ export class Hud {
     this.gaugeNeedle.style.bottom = `${fraction * 100}%`;
   }
 
-  setTurn(mine: boolean, waiting: boolean): void {
+  /**
+   * `joined` is how many players are in the room. It is shown while waiting
+   * because "waiting for opponent" alone cannot tell you whether your friend
+   * never tapped the invite or whether the room itself is broken.
+   */
+  setTurn(mine: boolean, waiting: boolean, joined?: number): void {
     if (waiting) {
-      this.banner.textContent = t('hud.waiting');
+      this.banner.textContent =
+        joined === undefined ? t('hud.waiting') : t('hud.waitingCount', { joined });
       this.banner.classList.remove('mine');
       this.hint.textContent = '';
       return;

@@ -54,6 +54,7 @@ const en: Dict = {
   'hud.you': 'You',
   'hud.opponent': 'Rival',
   'hud.waiting': 'Waiting for opponent…',
+  'hud.waitingCount': 'Waiting for opponent… {joined}/2',
   'hud.reconnecting': 'Reconnecting…',
 
   'shot.headshot': 'Headshot! −{damage}',
@@ -77,9 +78,9 @@ const en: Dict = {
 };
 
 const mn: Dict = {
-  'app.title': 'Харваачдын Талбар',
+  'app.title': 'Харваачдын талбар',
   'app.loading': 'Талбар ачаалж байна…',
-  'app.unsupported': 'Энэ төхөөрөмж 3D дүрс дэмжихгүй байна.',
+  'app.unsupported': 'Энэ төхөөрөмж 3D дүрслэл дэмжихгүй байна.',
   'app.unsupportedHint': 'WebGL боломжгүй байна. Өөр хөтөч эсвэл төхөөрөмж ашиглана уу.',
 
   'arena.greenwood': 'Ногоон ой',
@@ -95,18 +96,18 @@ const mn: Dict = {
   'rank.legend': 'Домог',
 
   'menu.play': 'Тоглох',
-  'menu.practice': 'Ботьтой тоглох',
+  'menu.practice': 'Боттой тоглох',
   'menu.invite': 'Найзаа урих',
   'menu.upgrades': 'Сайжруулалт',
   'menu.records': 'Амжилт',
   'menu.back': 'Буцах',
-  'menu.rating': 'Оноо',
+  'menu.rating': 'Зэрэглэл',
   'menu.cash': 'Алт',
-  'menu.record': '{wins}Я · {losses}Х',
-  'menu.recordLabel': 'Ялалт / хожигдол',
+  'menu.record': '{wins} ялалт · {losses} ялагдал',
+  'menu.recordLabel': 'Ялалт / ялагдал',
 
-  'upgrade.health': 'Их эрүүл мэнд',
-  'upgrade.damage': 'Суурь хохирол',
+  'upgrade.health': 'Хамгийн их амь',
+  'upgrade.damage': 'Үндсэн хохирол',
   'upgrade.headshot': 'Толгойн хохирол',
   'upgrade.buy': 'Сайжруулах · {cost}',
   'upgrade.max': 'Дээд түвшин',
@@ -115,7 +116,7 @@ const mn: Dict = {
 
   'hud.yourTurn': 'Таны ээлж',
   'hud.opponentTurn': 'Өрсөлдөгчийн ээлж',
-  'hud.aimHint': 'Чирж онилоод, тавьж харва',
+  'hud.aimHint': 'Чирж онилоод тавьж харваарай',
   'hud.power': 'Хүч',
   'hud.wind': 'Салхи',
   'hud.windCalm': 'Тайван',
@@ -124,23 +125,24 @@ const mn: Dict = {
   'hud.you': 'Та',
   'hud.opponent': 'Өрсөлдөгч',
   'hud.waiting': 'Өрсөлдөгчийг хүлээж байна…',
+  'hud.waitingCount': 'Өрсөлдөгчийг хүлээж байна… {joined}/2',
   'hud.reconnecting': 'Дахин холбогдож байна…',
 
   'shot.headshot': 'Толгойд оноолоо! −{damage}',
   'shot.body': 'Оноолоо −{damage}',
-  'shot.limb': 'Хажуугаар −{damage}',
-  'shot.miss': 'Оногүй',
+  'shot.limb': 'Мөчид оноолоо −{damage}',
+  'shot.miss': 'Оноогүй',
   'shot.blocked': 'Хаагдлаа',
 
   'result.win': 'Ялалт',
   'result.loss': 'Ялагдал',
   'result.forfeit': 'Өрсөлдөгч гарлаа — та яллаа',
-  'result.reward': '+{cash} алт · {rating} оноо',
+  'result.reward': '+{cash} алт · {rating} зэрэглэл',
   'result.again': 'Дахин тоглох',
   'result.exit': 'Гарах',
 
   'records.title': 'Найзууд',
-  'records.empty': 'Одоогоор амжилт алга. Ялж энд гарч ирээрэй.',
+  'records.empty': 'Одоогоор бүртгэл алга. Ялалт байгуулж энд гараарай.',
   'records.you': 'Та',
   'records.global': 'Дэлхий',
   'records.friends': 'Найзууд',

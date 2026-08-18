@@ -121,6 +121,14 @@ export class Net {
     });
   }
 
+  /**
+   * Record a room the SDK joined for us (the Share flow), so actions are
+   * allowed without a second join that would fail.
+   */
+  adoptRoom(roomId: string): void {
+    this.joinedRoom = roomId;
+  }
+
   async connectAndJoin(roomId: string): Promise<boolean> {
     const game = this.sdk?.game;
     if (!game) return false;

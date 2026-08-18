@@ -235,7 +235,8 @@ export class ArcherRig {
   private buildString(): void {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
-    const material = new THREE.LineBasicMaterial({ color: 0xfaf6e8 });
+    // Matches the bow so the string reads as part of it, not as an overlay.
+    const material = new THREE.LineBasicMaterial({ color: 0x8a5a2c });
     const line = new THREE.Line(geometry, material);
     line.frustumCulled = false;
     line.renderOrder = 6;

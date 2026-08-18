@@ -15,15 +15,41 @@ import type { ModelKey } from './models';
 import type { ArenaDefinition } from '../arenas';
 import type { Vec3 } from '../sim';
 
-const TRACER_POINTS = 22;
-const TRAIL_POINTS = 190;
+const TRACER_POINTS = 16;
+const TRAIL_POINTS = 90;
+
+/**
+ * A soft round dot, drawn once and reused by both the aim tracer and the
+ * arrow's trail.
+ *
+ * Thin lines read as debug overlay rather than as part of the game, so both
+ * are chunky spaced dots instead — the same shorthand the original uses for
+ * its aim arc.
+ */
+function dotTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gradient.addColorStop(0, 'rgba(255,255,255,1)');
+    gradient.addColorStop(0.55, 'rgba(255,255,255,0.95)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 64, 64);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
 
 export class ArenaView {
   readonly group = new THREE.Group();
 
-  private readonly tracer: THREE.Line;
+  private readonly tracer: THREE.Points;
   private readonly tracerGeometry: THREE.BufferGeometry;
-  private readonly trail: THREE.Line;
+  private readonly trail: THREE.Points;
   private readonly trailGeometry: THREE.BufferGeometry;
   private trailCount = 0;
 
@@ -39,13 +65,19 @@ export class ArenaView {
       'position',
       new THREE.BufferAttribute(new Float32Array(TRACER_POINTS * 3), 3),
     );
-    const tracerMaterial = new THREE.LineBasicMaterial({
-      color: 0xffffff,
+    const dot = dotTexture();
+    this.disposables.push(dot);
+
+    const tracerMaterial = new THREE.PointsMaterial({
+      color: 0x5fd8ff,
+      map: dot,
+      size: 0.34,
+      sizeAttenuation: true,
       transparent: true,
-      opacity: 0.8,
+      depthWrite: false,
       depthTest: false,
     });
-    this.tracer = new THREE.Line(this.tracerGeometry, tracerMaterial);
+    this.tracer = new THREE.Points(this.tracerGeometry, tracerMaterial);
     this.tracer.visible = false;
     this.tracer.renderOrder = 8;
     this.tracer.frustumCulled = false;
@@ -57,13 +89,16 @@ export class ArenaView {
       'position',
       new THREE.BufferAttribute(new Float32Array(TRAIL_POINTS * 3), 3),
     );
-    const trailMaterial = new THREE.LineBasicMaterial({
-      color: 0xffffff,
+    const trailMaterial = new THREE.PointsMaterial({
+      color: 0xdff4ff,
+      map: dot,
+      size: 0.2,
+      sizeAttenuation: true,
       transparent: true,
-      opacity: 0.34,
-      depthTest: false,
+      opacity: 0.8,
+      depthWrite: false,
     });
-    this.trail = new THREE.Line(this.trailGeometry, trailMaterial);
+    this.trail = new THREE.Points(this.trailGeometry, trailMaterial);
     this.trail.visible = false;
     this.trail.renderOrder = 7;
     this.trail.frustumCulled = false;
@@ -210,7 +245,7 @@ export class ArenaView {
       positions.setXYZ(i, p.x, p.y, p.z);
     }
     positions.needsUpdate = true;
-    (this.tracer.material as THREE.LineBasicMaterial).color.setHex(colour);
+    (this.tracer.material as THREE.PointsMaterial).color.setHex(colour);
     this.tracer.visible = true;
   }
 
