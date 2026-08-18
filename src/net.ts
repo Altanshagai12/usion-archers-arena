@@ -46,7 +46,7 @@ export class Net {
   }
 
   get roomId(): string | null {
-    return this.joinedRoom;
+    return this.joinedRoom ?? this.sdk?.game?.roomId ?? null;
   }
 
   myId(): string {
@@ -146,7 +146,10 @@ export class Net {
 
   async sendAction(type: string, data: unknown): Promise<void> {
     const game = this.sdk?.game;
-    if (!game || !this.joinedRoom) return;
+    // The SDK's own room is the fallback: it joins on our behalf during the
+    // share promotion, and gating on a second local flag dropped the moves
+    // sent in that window on the floor.
+    if (!game || !this.roomId) return;
     try {
       // Turn-based moves are safe to queue across a blip; realtime aim is not.
       await game.action(type, data, { queueOffline: true });
@@ -155,9 +158,23 @@ export class Net {
     }
   }
 
+  /**
+   * Ask the relay to replay the room's action log.
+   *
+   * This is the one recovery that works for anything lost in either
+   * direction, so it is worth calling whenever the match looks stalled.
+   */
+  requestSync(): void {
+    try {
+      this.sdk?.game?.requestSync();
+    } catch {
+      // Best effort — a failed sync just means we retry on the next nudge.
+    }
+  }
+
   sendRealtime(type: string, data: unknown): void {
     const game = this.sdk?.game;
-    if (!game || !this.joinedRoom) return;
+    if (!game || !this.roomId) return;
     try {
       game.realtime(type, data);
     } catch {

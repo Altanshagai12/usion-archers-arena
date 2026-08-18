@@ -44,6 +44,8 @@ export interface LeaderboardEntry {
 }
 
 export interface UsionGame {
+  /** The room the SDK itself considers joined. Null until it joins one. */
+  roomId?: string | null;
   connect(): Promise<any>;
   join(roomId: string): Promise<any>;
   leave(): Promise<any>;

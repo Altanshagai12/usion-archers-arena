@@ -36,6 +36,7 @@ import { CameraDirector } from './render/camera';
 import type { ViewRequest } from './render/camera';
 import { preload } from './render/models';
 import type { ModelKey } from './render/models';
+import { startPlan } from './handshake';
 import { createScene, isWebGLAvailable, waitForViewport } from './render/scene';
 import type { SceneHandles } from './render/scene';
 import { facingOf, previewPath, simulateShot } from './sim';
@@ -59,6 +60,8 @@ const MIN_SHOT_MS = 300;
 const KNOCKDOWN_TIMEOUT = 6;
 /** How long to wait for the host's INIT before assuming we are standalone. */
 const INIT_TIMEOUT_MS = 2500;
+/** How often a stalled start re-announces itself. See `advanceWaiting`. */
+const NUDGE_INTERVAL_MS = 2500;
 
 type Phase = 'boot' | 'menu' | 'waiting' | 'playing' | 'over';
 
@@ -97,6 +100,10 @@ class Game {
 
   private readonly readyStats = new Map<string, ArcherStats>();
   private readySent = false;
+  /** Set once the saved profile is in, so a nudge never announces stub stats. */
+  private profileReady = false;
+  /** When the last "still here, still ready" nudge went out. */
+  private lastNudgeAt = 0;
   private localSequence = 0;
   private lastAimSent = 0;
   private animatedSequence = 0;
@@ -214,6 +221,7 @@ class Game {
     const rendering = this.startRenderer();
 
     this.profile = await loadProfile();
+    this.profileReady = true;
     this.menu.setProfile(this.profile);
 
     // The menu needs no renderer, and waiting for one costs up to 4 s while a
@@ -269,6 +277,10 @@ class Game {
    * menu, so the share flow never got past waiting.
    */
   private async joinRoom(roomId: string, alreadyJoined = false): Promise<void> {
+    // The host can assign a room we are already in. Re-entering would throw a
+    // live match back to 'waiting' with a blank arena.
+    if (this.net.roomId === roomId && this.state.started) return;
+
     this.vsBot = false;
     this.phase = 'waiting';
     this.menu.setVisible(false);
@@ -313,28 +325,66 @@ class Game {
       this.hud.setTurn(false, true, roster.length);
       return;
     }
-    if (this.state.started || this.readySent) {
+    // A roster change during a live match must not stomp the turn banner.
+    if (this.state.started) return;
+
+    // Full room, no match yet: say so honestly while the handshake completes.
+    this.hud.setTurn(false, true, roster.length);
+    if (this.readySent) {
       this.maybeStartMatch();
       return;
     }
 
     // Everyone announces their own upgraded stats; the host locks the match.
     this.readySent = true;
+    this.lastNudgeAt = performance.now();
     void this.net.sendAction('ready', { stats: statsFor(this.profile.upgrades) });
+  }
+
+  /**
+   * Nudge a start that never happened.
+   *
+   * An embedded mini-app relays its actions through the host by postMessage,
+   * and that path carries NO acknowledgement — the SDK posts the message and
+   * resolves immediately. If the backend rejects the action (classically, a
+   * socket that is connected but not yet in the Socket.IO room), it is dropped
+   * in silence and nothing retries it. A one-shot `ready` is therefore not
+   * safe: lose it and both players sit on "waiting for opponent" forever with
+   * a room that is visibly full, which is exactly what happened.
+   *
+   * So while the room is full and the match has not started, keep announcing
+   * and keep asking the relay to replay its log. Both are idempotent —
+   * `readyStats` is keyed by player, and a replayed `start` rebuilds the same
+   * state — so the cost of a redundant nudge is nothing.
+   */
+  private advanceWaiting(nowMs: number): void {
+    if (this.vsBot || this.state.started || this.phase !== 'waiting') return;
+    // Not gated on having announced already: a join that never resolved leaves
+    // readySent false, and that is precisely a case worth recovering from.
+    if (this.net.roster.length < 2 || !this.profileReady) return;
+    if (nowMs - this.lastNudgeAt < NUDGE_INTERVAL_MS) return;
+
+    this.lastNudgeAt = nowMs;
+    this.readySent = true;
+    void this.net.sendAction('ready', { stats: statsFor(this.profile.upgrades) });
+    this.net.requestSync();
+    this.maybeStartMatch();
   }
 
   private maybeStartMatch(): void {
     if (this.state.started || this.vsBot) return;
-    const roster = this.net.roster;
-    if (roster.length < 2 || roster[0] !== this.net.myId()) return;
 
-    const first = this.readyStats.get(roster[0]);
-    const second = this.readyStats.get(roster[1]);
-    if (!first || !second) return;
+    const stats = startPlan(
+      this.net.roster,
+      this.net.myId(),
+      statsFor(this.profile.upgrades),
+      this.readyStats,
+    );
+    if (!stats) return;
 
     void this.net.sendAction('start', {
       arenaIndex: highestUnlockedArena(this.profile.rating),
-      stats: [first, second],
+      stats,
     });
   }
 
@@ -811,6 +861,7 @@ class Game {
     const dt = this.lastFrameAt ? Math.min(0.1, (now - this.lastFrameAt) / 1000) : 1 / 60;
     this.lastFrameAt = now;
     this.advanceBotAim(now);
+    this.advanceWaiting(now);
     this.advanceKnockdownHold(dt);
     this.rigs[0]?.update(now, dt);
     this.rigs[1]?.update(now, dt);
