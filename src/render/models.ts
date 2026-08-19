@@ -88,6 +88,67 @@ const cache = new Map<ModelKey, THREE.Group>();
 const clips = new Map<ModelKey, THREE.AnimationClip[]>();
 const pending = new Map<ModelKey, Promise<THREE.Group>>();
 
+/**
+ * Is the tail of an elongated model at the far end of its long axis?
+ *
+ * An arrow is the only asymmetric model here, and its asymmetry is reliable:
+ * the fletched end is far fatter than the point. Measuring which end that is
+ * beats assuming the model was authored pointing any particular way — this one
+ * was modelled pointing backwards, so the nocked arrow sat on the bow facing
+ * the archer and every shot flew tail-first.
+ *
+ * Exported so the rule is tested — it is a heuristic, and a silent wrong
+ * answer turns every arrow in the game around.
+ */
+export function tailAtMax(root: THREE.Object3D, axis: 0 | 1 | 2): boolean {
+  const points: Array<[number, number, number]> = [];
+  const vertex = new THREE.Vector3();
+  root.updateWorldMatrix(true, true);
+  root.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    const position = mesh.isMesh ? mesh.geometry?.getAttribute('position') : null;
+    if (!position) return;
+    for (let i = 0; i < position.count; i += 1) {
+      vertex.fromBufferAttribute(position as THREE.BufferAttribute, i);
+      vertex.applyMatrix4(mesh.matrixWorld);
+      points.push([vertex.x, vertex.y, vertex.z]);
+    }
+  });
+  if (points.length < 8) return false;
+
+  let low = Infinity;
+  let high = -Infinity;
+  const others = [0, 1, 2].filter((i) => i !== axis) as [number, number];
+  const centre = [0, 0];
+  for (const point of points) {
+    if (point[axis] < low) low = point[axis];
+    if (point[axis] > high) high = point[axis];
+    centre[0] += point[others[0]];
+    centre[1] += point[others[1]];
+  }
+  centre[0] /= points.length;
+  centre[1] /= points.length;
+
+  const span = high - low;
+  if (span < 1e-6) return false;
+
+  // Mean distance from the shaft's own centre line, over the outermost sixth
+  // at each end. Fletching flares; a point tapers.
+  const girth = (from: number, to: number): number => {
+    let sum = 0;
+    let count = 0;
+    for (const point of points) {
+      const along = (point[axis] - low) / span;
+      if (along < from || along > to) continue;
+      sum += Math.hypot(point[others[0]] - centre[0], point[others[1]] - centre[1]);
+      count += 1;
+    }
+    return count ? sum / count : 0;
+  };
+
+  return girth(0.84, 1) > girth(0, 0.16);
+}
+
 function normalise(
   root: THREE.Object3D,
   targetHeight: number,
@@ -130,6 +191,12 @@ function normalise(
           new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2),
         );
       }
+    } else if (tailAtMax(root, longest.x ? 0 : longest.y ? 1 : 2)) {
+      // Aligning the long axis leaves the model pointing either way down it.
+      // Turn it round so the POINT leads.
+      axisFix.premultiply(
+        new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI),
+      );
     }
   }
 

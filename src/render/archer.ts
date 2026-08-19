@@ -41,6 +41,20 @@ import { dressCharacter, outfitFor } from './outfit';
 /** Fallback bow carry for a mesh with no skeleton to hang it on. */
 const BOW_REST = new THREE.Vector3(0.3, 1.22, 0.52);
 
+/**
+ * How much of the shot's elevation each spine bone carries.
+ *
+ * Aiming up and down has to move the BOW, not just the arrow — an archer
+ * raises the whole bow arm. Bending the spine does that with everything
+ * attached: the bow is skinned to one hand, the string bone follows the other,
+ * and the nocked arrow lies on the line between them, so all of it elevates
+ * together. Split over two bones so the torso curves instead of hinging.
+ */
+const SPINE_AIM_SHARE: Array<[string, number]> = [
+  ['mixamorig:Spine1', 0.45],
+  ['mixamorig:Spine2', 0.45],
+];
+
 /** Seconds the loose takes to run the draw clip back to rest. */
 const LOOSE_SECONDS = 0.16;
 /** Beat spent lying on the ground between falling and getting up. */
@@ -80,6 +94,12 @@ export class ArcherRig {
   private scrub = 0;
   private aimBlend = 0;
   private loosing = false;
+
+  /** Spine bones that carry the aim, with the share of it each takes. */
+  private aimBones: Array<{ bone: THREE.Bone; share: number }> = [];
+  private readonly pitchAxis = new THREE.Vector3();
+  private readonly parentSpace = new THREE.Matrix4();
+  private readonly tilt = new THREE.Quaternion();
 
   private bowHand: THREE.Bone | null = null;
   /** The hand that pulls; the bowstring is anchored to it. */
@@ -130,6 +150,10 @@ export class ArcherRig {
     dressCharacter(character, outfitFor(options.tint ?? 0x8a8f99));
     this.setupAnimation(character, options.model, aimClips, deathClips);
     this.findHands(character);
+    this.aimBones = SPINE_AIM_SHARE.map(([name, share]) => ({
+      bone: this.findBone(character, name, name.split(':')[1]),
+      share,
+    })).filter((entry): entry is { bone: THREE.Bone; share: number } => entry.bone !== null);
 
     const ownBow = this.partOf(character, /^bow/i);
     const ownArrow = this.partOf(character, /^arrow/i);
@@ -464,6 +488,31 @@ export class ArcherRig {
     spine.add(holder);
   }
 
+  /**
+   * Bend the spine to the shot's elevation.
+   *
+   * Applied after the mixer, which rewrites every animated bone from the clip
+   * each frame, and as a rotation about the LANE's axis rather than the bone's
+   * own — Mixamo's spine bones do not share the world's axes, so turning one
+   * about its local x bends the archer sideways.
+   */
+  private applyAim(): void {
+    if (!this.aimBones.length || this.phase !== 'ready') return;
+
+    // The pitch axis is the facing group's own +x: inside it, +z is down-range.
+    this.facingGroup.updateWorldMatrix(true, false);
+    for (const { bone, share } of this.aimBones) {
+      const parent = bone.parent;
+      if (!parent) continue;
+      parent.updateWorldMatrix(true, false);
+      this.pitchAxis.set(1, 0, 0).transformDirection(this.facingGroup.matrixWorld);
+      this.parentSpace.copy(parent.matrixWorld).invert();
+      this.pitchAxis.transformDirection(this.parentSpace).normalize();
+      this.tilt.setFromAxisAngle(this.pitchAxis, -this.pitch * share);
+      bone.quaternion.premultiply(this.tilt);
+    }
+  }
+
   /** Elevation in radians — the number the gauge shows. Aiming is Y only. */
   setAim(pitch: number): void {
     this.pitch = pitch;
@@ -596,6 +645,7 @@ export class ArcherRig {
     }
 
     this.mixer?.update(dt);
+    this.applyAim();
     // Bones moved; refresh world matrices before the bow reads the hand.
     this.character?.updateWorldMatrix(true, true);
 
@@ -623,7 +673,15 @@ export class ArcherRig {
       this.arrowPivot.position.copy(this.bowPivot.position);
       this.arrowPivot.position.z -= this.arrowReach;
     }
-    this.arrowPivot.rotation.x = -this.pitch;
+    // Along the line between the hands, so the shaft passes over the grip and
+    // stays with the arms wherever the aim has put them — rather than being
+    // pitched on its own, which left it climbing while the bow stood still.
+    if (this.bowHand) {
+      this.bowHand.getWorldPosition(this.scratchB);
+      this.arrowPivot.lookAt(this.scratchB);
+    } else {
+      this.arrowPivot.rotation.x = -this.pitch;
+    }
     this.arrowPivot.visible = this.arrow !== null && this.phase === 'ready' && !this.arrowGone;
 
     // Her own bowstring: the nocking-point bone is moved onto the drawing
