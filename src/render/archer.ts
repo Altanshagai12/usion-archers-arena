@@ -34,6 +34,7 @@
 
 import * as THREE from 'three';
 
+import { AimBend } from './aim-bend';
 import { animationsFor, instantiate, loadClips } from './models';
 import type { ModelKey } from './models';
 import { dressCharacter, outfitFor } from './outfit';
@@ -95,11 +96,9 @@ export class ArcherRig {
   private aimBlend = 0;
   private loosing = false;
 
-  /** Spine bones that carry the aim, with the share of it each takes. */
-  private aimBones: Array<{ bone: THREE.Bone; share: number }> = [];
+  /** Spine bones that carry the aim. */
+  private readonly aim = new AimBend();
   private readonly pitchAxis = new THREE.Vector3();
-  private readonly parentSpace = new THREE.Matrix4();
-  private readonly tilt = new THREE.Quaternion();
 
   private bowHand: THREE.Bone | null = null;
   /** The hand that pulls; the bowstring is anchored to it. */
@@ -150,10 +149,10 @@ export class ArcherRig {
     dressCharacter(character, outfitFor(options.tint ?? 0x8a8f99));
     this.setupAnimation(character, options.model, aimClips, deathClips);
     this.findHands(character);
-    this.aimBones = SPINE_AIM_SHARE.map(([name, share]) => ({
-      bone: this.findBone(character, name, name.split(':')[1]),
-      share,
-    })).filter((entry): entry is { bone: THREE.Bone; share: number } => entry.bone !== null);
+    for (const [name, share] of SPINE_AIM_SHARE) {
+      const bone = this.findBone(character, name, name.split(':')[1]);
+      if (bone) this.aim.add(bone, share);
+    }
 
     const ownBow = this.partOf(character, /^bow/i);
     const ownArrow = this.partOf(character, /^arrow/i);
@@ -488,29 +487,14 @@ export class ArcherRig {
     spine.add(holder);
   }
 
-  /**
-   * Bend the spine to the shot's elevation.
-   *
-   * Applied after the mixer, which rewrites every animated bone from the clip
-   * each frame, and as a rotation about the LANE's axis rather than the bone's
-   * own — Mixamo's spine bones do not share the world's axes, so turning one
-   * about its local x bends the archer sideways.
-   */
+  /** Bend the spine to the shot's elevation, on top of the clip's own pose. */
   private applyAim(): void {
-    if (!this.aimBones.length || this.phase !== 'ready') return;
-
+    if (this.aim.size === 0) return;
     // The pitch axis is the facing group's own +x: inside it, +z is down-range.
     this.facingGroup.updateWorldMatrix(true, false);
-    for (const { bone, share } of this.aimBones) {
-      const parent = bone.parent;
-      if (!parent) continue;
-      parent.updateWorldMatrix(true, false);
-      this.pitchAxis.set(1, 0, 0).transformDirection(this.facingGroup.matrixWorld);
-      this.parentSpace.copy(parent.matrixWorld).invert();
-      this.pitchAxis.transformDirection(this.parentSpace).normalize();
-      this.tilt.setFromAxisAngle(this.pitchAxis, -this.pitch * share);
-      bone.quaternion.premultiply(this.tilt);
-    }
+    this.pitchAxis.set(1, 0, 0).transformDirection(this.facingGroup.matrixWorld);
+    // An archer on the ground is not aiming at anything.
+    this.aim.bend(this.pitchAxis, this.phase === 'ready' ? -this.pitch : 0);
   }
 
   /** Elevation in radians — the number the gauge shows. Aiming is Y only. */
@@ -644,6 +628,10 @@ export class ArcherRig {
       this.aimAction?.setEffectiveWeight(this.aimBlend);
     }
 
+    // The clip's own pose goes back before the mixer runs, because the mixer
+    // will not rewrite a bone whose animated value has not changed — and a
+    // bend left on top of one that is never rewritten accumulates.
+    this.aim.restore();
     this.mixer?.update(dt);
     this.applyAim();
     // Bones moved; refresh world matrices before the bow reads the hand.
