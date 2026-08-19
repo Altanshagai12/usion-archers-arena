@@ -56,6 +56,14 @@ const SPINE_AIM_SHARE: Array<[string, number]> = [
   ['mixamorig:Spine2', 0.45],
 ];
 
+/**
+ * How far the string has to be off the grip before the arrow has a direction.
+ *
+ * Below this the two points coincide and any heading is arbitrary, so the
+ * arrow is simply not on the string yet.
+ */
+const MIN_NOCK_REACH = 0.12;
+
 /** Seconds the loose takes to run the draw clip back to rest. */
 const LOOSE_SECONDS = 0.16;
 /** Beat spent lying on the ground between falling and getting up. */
@@ -107,6 +115,8 @@ export class ArcherRig {
   private bow: THREE.Object3D | null = null;
   /** The character's own string bone, when it has one. See `load`. */
   private stringBone: THREE.Bone | null = null;
+  /** Where that bone sits with the string at rest — straight between the tips. */
+  private readonly stringRest = new THREE.Vector3();
   private arrow: THREE.Object3D | null = null;
   private readonly arrowPivot = new THREE.Group();
   /** Nock to arrow centre, measured off the mesh. */
@@ -126,6 +136,8 @@ export class ArcherRig {
 
   private readonly scratch = new THREE.Vector3();
   private readonly scratchB = new THREE.Vector3();
+  /** Where the string is being held this frame, in world space. */
+  private readonly nockPoint = new THREE.Vector3();
 
   constructor(options: ArcherVisualOptions) {
     this.facingGroup.rotation.y = options.facing === 1 ? 0 : Math.PI;
@@ -169,6 +181,9 @@ export class ArcherRig {
       // point. No clip drives it either, so the string stayed rigid — the
       // frame loop pulls that bone to the drawing hand instead.
       this.stringBone = this.findBone(character, 'mixamorig:Left_arch2', 'Left_arch2');
+      // Captured before anything writes to it. No clip drives this bone, so
+      // its bind position IS the resting string and stays valid all match.
+      if (this.stringBone) this.stringRest.copy(this.stringBone.position);
       return;
     }
 
@@ -650,36 +665,62 @@ export class ArcherRig {
     this.bowPivot.rotation.x = -this.pitch * 0.75;
     this.bowPivot.visible = this.phase === 'ready';
 
-    // The arrow rides the drawing hand, so it travels back with the string as
-    // the draw builds, and it lies along the elevation the shot will actually
-    // leave at rather than along the bow's damped tilt.
-    if (this.stringHand) {
-      this.stringHand.getWorldPosition(this.scratch);
-      this.facingGroup.worldToLocal(this.scratch);
-      this.arrowPivot.position.copy(this.scratch);
+    // Her own bowstring: the nocking-point bone rides the drawing hand, which
+    // is all a bowstring does — the vertices around it stay weighted to the
+    // limbs, so the string bends into a V.
+    //
+    // But only WHILE the shot is being drawn. A hand is on the string between
+    // nocking and loosing and at no other time; the rest of it is spent
+    // reaching into the quiver, breaking a fall or pushing off the ground, and
+    // a string welded to the hand was dragged straight through the archer's
+    // body. So the pull follows the draw itself, and at rest the bone returns
+    // to where the string hangs straight — which also gives the snap on
+    // release for free.
+    this.nockPoint.set(0, 0, 0);
+    let nocked = false;
+    if (this.stringBone && this.stringHand && this.stringBone.parent) {
+      const pull = this.phase === 'ready' ? this.scrub : 0;
+      if (pull <= 0.001) {
+        this.stringBone.position.copy(this.stringRest);
+      } else {
+        this.stringHand.getWorldPosition(this.scratch);
+        this.stringBone.parent.worldToLocal(this.scratch);
+        this.stringBone.position.lerpVectors(this.stringRest, this.scratch, pull);
+      }
+      // Where the string ended up, for the arrow to sit on.
+      this.stringBone.updateMatrixWorld(true);
+      this.stringBone.getWorldPosition(this.nockPoint);
+      nocked = true;
+    } else if (this.stringHand) {
+      this.stringHand.getWorldPosition(this.nockPoint);
+      nocked = true;
+    }
+
+    // The arrow's tail sits ON the string, so it goes wherever the nocking
+    // point goes and can never end up somewhere the string is not.
+    if (nocked) {
+      this.arrowPivot.position.copy(this.facingGroup.worldToLocal(this.scratch.copy(this.nockPoint)));
     } else {
       this.arrowPivot.position.copy(this.bowPivot.position);
       this.arrowPivot.position.z -= this.arrowReach;
     }
-    // Along the line between the hands, so the shaft passes over the grip and
-    // stays with the arms wherever the aim has put them — rather than being
-    // pitched on its own, which left it climbing while the bow stood still.
+
+    // Along the line from the string to the grip, so the shaft passes over the
+    // bow and stays with the arms wherever the aim has put them — rather than
+    // being pitched on its own, which left it climbing while the bow stood
+    // still.
+    let aimed = true;
     if (this.bowHand) {
       this.bowHand.getWorldPosition(this.scratchB);
-      this.arrowPivot.lookAt(this.scratchB);
+      // Undrawn, the nock sits on the grip and there is no direction to be
+      // had. Keep the last one rather than snapping to something arbitrary.
+      aimed = nocked && this.nockPoint.distanceTo(this.scratchB) > MIN_NOCK_REACH;
+      if (aimed) this.arrowPivot.lookAt(this.scratchB);
     } else {
       this.arrowPivot.rotation.x = -this.pitch;
     }
-    this.arrowPivot.visible = this.arrow !== null && this.phase === 'ready' && !this.arrowGone;
-
-    // Her own bowstring: the nocking-point bone is moved onto the drawing
-    // hand, which is all a bowstring does. The vertices around it are weighted
-    // to the limbs, so they stay put and the string bends into a V.
-    if (this.stringBone && this.stringHand && this.stringBone.parent) {
-      this.stringHand.getWorldPosition(this.scratch);
-      this.stringBone.parent.worldToLocal(this.scratch);
-      this.stringBone.position.copy(this.scratch);
-    }
+    this.arrowPivot.visible =
+      this.arrow !== null && this.phase === 'ready' && !this.arrowGone && aimed;
 
     // The drawn-in-code string is rebuilt last, once the bow and the hands
     // have moved. It exists only for a bow that has no string of its own.
