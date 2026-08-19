@@ -36,6 +36,7 @@ import * as THREE from 'three';
 
 import { animationsFor, instantiate, loadClips } from './models';
 import type { ModelKey } from './models';
+import { dressCharacter, outfitFor } from './outfit';
 
 /** Fallback bow carry for a mesh with no skeleton to hang it on. */
 const BOW_REST = new THREE.Vector3(0.3, 1.22, 0.52);
@@ -53,7 +54,7 @@ export interface ArcherVisualOptions {
   model: ModelKey;
   /** +1 shoots toward +z, -1 toward -z. */
   facing: 1 | -1;
-  /** Applied to the character, which ships untextured. */
+  /** The tunic colour — the character ships untextured and undressed. */
   tint?: number;
 }
 
@@ -125,7 +126,7 @@ export class ArcherRig {
 
     this.character = character;
     this.bodyPivot.add(character);
-    if (options.tint !== undefined) this.applyTint(character, options.tint);
+    dressCharacter(character, outfitFor(options.tint ?? 0x8a8f99));
 
     this.setupAnimation(character, options.model, aimClips, deathClips);
     this.attachBow(character, bow);
@@ -412,22 +413,6 @@ export class ArcherRig {
     holder.rotation.set(0.25, 0, 0.32);
     holder.add(quiver);
     spine.add(holder);
-  }
-
-  /** The Mixamo exports carry no materials, so the colour is set here. */
-  private applyTint(root: THREE.Object3D, tint: number): void {
-    const colour = new THREE.Color(tint);
-    root.traverse((child) => {
-      const mesh = child as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      const cloned = list.map((material) => {
-        const copy = (material as THREE.MeshStandardMaterial).clone();
-        copy.color.copy(colour);
-        return copy;
-      });
-      mesh.material = Array.isArray(mesh.material) ? cloned : cloned[0];
-    });
   }
 
   /** Elevation in radians — the number the gauge shows. Aiming is Y only. */
