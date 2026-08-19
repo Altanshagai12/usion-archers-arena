@@ -189,6 +189,32 @@ describe('dressCharacter', () => {
     expect(material.color.getHex()).toBe(0xffffff);
   });
 
+  it('leaves a character that came with its own artwork alone', () => {
+    // A real clothed character from Mixamo embeds its maps. Painting flat
+    // colours over an artist's texture would only make it worse.
+    const mesh = skinned([{ bone: SKELETON.indexOf('mixamorigSpine1'), y: 1.3 }]);
+    (mesh.material as THREE.MeshStandardMaterial).map = new THREE.Texture();
+    dressCharacter(mesh, OUTFIT);
+
+    const material = mesh.material as THREE.MeshStandardMaterial;
+    expect(material.map).toBeTruthy();
+    expect(material.vertexColors).toBe(false);
+    expect(mesh.geometry.getAttribute('color')).toBeUndefined();
+  });
+
+  it('still tells two textured archers apart, without washing out the texture', () => {
+    const wear = (tunic: number): THREE.Color => {
+      const mesh = skinned([{ bone: SKELETON.indexOf('mixamorigSpine1'), y: 1.3 }]);
+      (mesh.material as THREE.MeshStandardMaterial).map = new THREE.Texture();
+      dressCharacter(mesh, outfitFor(tunic));
+      return (mesh.material as THREE.MeshStandardMaterial).color;
+    };
+    const you = wear(0x56b7f0);
+    const foe = wear(0xe0574f);
+    expect(you.getHex()).not.toBe(foe.getHex());
+    // A wash, not a repaint: still much closer to white than to the tunic.
+    expect(you.getHex()).not.toBe(0x56b7f0);
+  });
   it('leaves an unpaintable mesh flat rather than black', () => {
     // vertexColors with no colour attribute renders the whole figure black,
     // so a mesh that cannot be painted must keep the flat team colour.

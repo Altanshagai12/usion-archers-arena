@@ -16,6 +16,11 @@
  *
  * The tunic takes the team colour, so at a glance you can still tell which
  * archer is you while the rest of the outfit stays the same on both.
+ *
+ * A character that arrives with its OWN textures — a real clothed character
+ * rather than a mannequin — is left alone. Painting flat colours over an
+ * artist's texture would only make it worse, so it keeps its maps and takes a
+ * light wash of the team colour instead.
  */
 
 import * as THREE from 'three';
@@ -48,6 +53,28 @@ export function outfitFor(tunic: number): Outfit {
 
 /** Fraction of the pelvis, measured from its top, that the belt covers. */
 const BELT_DEPTH = 0.28;
+
+/**
+ * How far a textured character is pulled toward its team colour.
+ *
+ * Enough to tell two of them apart at range, light enough to leave the
+ * artwork recognisable.
+ */
+const TEAM_WASH = 0.3;
+
+/** Does this character come with its own artwork? */
+function isTextured(root: THREE.Object3D): boolean {
+  let found = false;
+  root.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (found || !mesh.isMesh) return;
+    const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    if (list.some((material) => Boolean((material as THREE.MeshStandardMaterial)?.map))) {
+      found = true;
+    }
+  });
+  return found;
+}
 
 /**
  * Which garment a bone wears. Exported so the ordering below is tested.
@@ -181,9 +208,24 @@ function paint(mesh: THREE.SkinnedMesh, outfit: Outfit): boolean {
  * unmodulated — the material colour multiplies them.
  */
 export function dressCharacter(root: THREE.Object3D, outfit: Outfit): void {
+  const textured = isTextured(root);
+
   root.traverse((child) => {
     const mesh = child as THREE.SkinnedMesh;
     if (!mesh.isMesh) return;
+
+    if (textured) {
+      // Keep the artwork; just make the two archers tellable apart. The
+      // material colour multiplies the map, so this has to stay a wash.
+      const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const washed = list.map((material) => {
+        const copy = (material as THREE.MeshStandardMaterial).clone();
+        copy.color.lerp(new THREE.Color(outfit.tunic), TEAM_WASH);
+        return copy;
+      });
+      mesh.material = Array.isArray(mesh.material) ? washed : washed[0];
+      return;
+    }
 
     // Painted FIRST, because a mesh that could not be painted must never be
     // told to use vertex colours: the shader would read an attribute that is

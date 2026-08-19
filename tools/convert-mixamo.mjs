@@ -7,8 +7,12 @@
  * clip so those clips can be played on it — three binds clips by node name and
  * the names match exactly.
  *
- * The exports carry no materials or textures at all, so the character arrives
- * untextured and the game colours it per seat. That trade is deliberate: real
+ * Mixamo's own mannequins (Beta, X Bot, Y Bot) carry flat materials and NO
+ * textures, so the character arrives bare and the game dresses it per seat by
+ * painting its vertices (src/render/outfit.ts). A real clothed character from
+ * the Characters tab does embed its maps, and those are kept — swapping one in
+ * needs no code change, and the game skips its own painting when it sees them.
+ * That trade is deliberate: real
  * archery motion matters more here than a painted figure, and nothing else
  * available ships a draw.
  *
@@ -85,18 +89,41 @@ for (const source of SOURCES) {
     });
     for (const mesh of doomed) mesh.removeFromParent();
   } else {
-    // The exports have no materials; give every surface something plain that
-    // the game can tint per seat.
+    // FBXLoader builds Phong materials, which is not what a glTF wants. Carry
+    // over anything the character actually shipped with and substitute a plain
+    // surface only where there was nothing to keep.
+    let kept = 0;
     group.traverse((child) => {
       if (!child.isMesh) return;
-      child.material = new THREE.MeshStandardMaterial({
-        color: 0xb9bec7,
-        roughness: 0.82,
-        metalness: 0.02,
+      const originals = Array.isArray(child.material) ? child.material : [child.material];
+      const converted = originals.map((original) => {
+        const map = original?.map ?? null;
+        if (!map) {
+          return new THREE.MeshStandardMaterial({
+            color: 0xb9bec7,
+            roughness: 0.82,
+            metalness: 0.02,
+          });
+        }
+        kept += 1;
+        return new THREE.MeshStandardMaterial({
+          name: original.name,
+          map,
+          normalMap: original.normalMap ?? null,
+          color: original.color ? original.color.clone() : new THREE.Color(0xffffff),
+          roughness: 0.82,
+          metalness: 0.02,
+        });
       });
+      child.material = Array.isArray(child.material) ? converted : converted[0];
       child.castShadow = true;
       child.receiveShadow = true;
     });
+    console.log(
+      kept > 0
+        ? `  kept ${kept} textured material(s) — the game will not paint over them`
+        : '  no textures in this export (a Mixamo mannequin) — the game paints an outfit on',
+    );
   }
 
   const glb = await exportGlb(group, [clip]);
