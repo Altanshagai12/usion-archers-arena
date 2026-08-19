@@ -86,6 +86,8 @@ export class ArcherRig {
   private stringHand: THREE.Bone | null = null;
 
   private bow: THREE.Object3D | null = null;
+  /** The character's own string bone, when it has one. See `load`. */
+  private stringBone: THREE.Bone | null = null;
   private arrow: THREE.Object3D | null = null;
   private readonly arrowPivot = new THREE.Group();
   /** Nock to arrow centre, measured off the mesh. */
@@ -127,41 +129,81 @@ export class ArcherRig {
     this.bodyPivot.add(character);
     dressCharacter(character, outfitFor(options.tint ?? 0x8a8f99));
     this.setupAnimation(character, options.model, aimClips, deathClips);
+    this.findHands(character);
 
-    // A real archer character arrives holding its own bow, arrow and quiver,
-    // all skinned to the same skeleton — so the draw carries them by itself and
-    // nothing here has to place them, or to draw a string across a bow whose
-    // own is already modelled. Only a bare mannequin needs to be handed props.
-    if (this.hasOwnBow(character)) return;
+    const ownBow = this.partOf(character, /^bow/i);
+    const ownArrow = this.partOf(character, /^arrow/i);
 
-    const [bow, arrow, quiver] = await Promise.all([
-      instantiate('bow'),
-      instantiate('arrow'),
-      instantiate('quiver'),
-    ]);
+    // Her own arrow hangs off a bone parented to the HIPS that no clip touches,
+    // so it sits frozen by her waist through the entire draw. Hidden, and the
+    // game's own nocked arrow — which rides the drawing hand — takes its place.
+    if (ownArrow) ownArrow.visible = false;
+    this.attachArrow(await instantiate('arrow'));
+
+    if (ownBow) {
+      // Her bow is skinned to her hand and carries its own string, 18 vertices
+      // of which are weighted to a bone sitting exactly mid-limb: the nocking
+      // point. No clip drives it either, so the string stayed rigid — the
+      // frame loop pulls that bone to the drawing hand instead.
+      this.stringBone = this.findBone(character, 'mixamorig:Left_arch2', 'Left_arch2');
+      return;
+    }
+
+    const [bow, quiver] = await Promise.all([instantiate('bow'), instantiate('quiver')]);
     this.attachBow(character, bow);
-    this.attachArrow(arrow);
     this.attachQuiver(character, quiver);
   }
 
   /**
-   * Does this character already carry a bow?
+   * A part of the character, found by MATERIAL name.
    *
-   * Matched on the MATERIAL name rather than the mesh name: the exporter's
-   * node names did not line up with the geometry they held, while the
-   * materials ("Bow_MAT", "Arrow_MAT", "Body_MAT1") named their parts exactly.
+   * The exporter's node names did not line up with the geometry they held,
+   * while the materials ("Bow_MAT", "Arrow_MAT", "Body_MAT1") named their
+   * parts exactly.
    */
-  private hasOwnBow(character: THREE.Object3D): boolean {
-    let found = false;
+  private partOf(character: THREE.Object3D, pattern: RegExp): THREE.Mesh | null {
+    let found: THREE.Mesh | null = null;
     character.traverse((child) => {
       const mesh = child as THREE.Mesh;
       if (found || !mesh.isMesh) return;
       const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      if (list.some((material) => /bow/i.test((material as THREE.Material)?.name ?? ''))) {
-        found = true;
+      if (list.some((material) => pattern.test((material as THREE.Material)?.name ?? ''))) {
+        found = mesh;
       }
     });
     return found;
+  }
+
+  /**
+   * Which hand holds the bow and which pulls the string.
+   *
+   * Measured rather than assumed: the draw clip is sampled part-way through
+   * and whichever wrist ends up further down-range is the one supporting the
+   * bow. Everything that has to sit on the string — the nocked arrow, the
+   * string itself — hangs off the other one.
+   */
+  private findHands(character: THREE.Object3D): void {
+    if (this.drawAction && this.mixer) {
+      this.drawAction.time = this.drawAction.getClip().duration * 0.75;
+      this.mixer.update(0);
+    }
+    character.updateWorldMatrix(true, true);
+
+    const left = this.findBone(character, 'mixamorig:LeftHand', 'LeftHand', 'Wrist.L');
+    const right = this.findBone(character, 'mixamorig:RightHand', 'RightHand', 'Wrist.R');
+
+    if (left && right) {
+      const leftZ = this.facingGroup.worldToLocal(left.getWorldPosition(this.scratch)).z;
+      const rightZ = this.facingGroup.worldToLocal(right.getWorldPosition(this.scratchB)).z;
+      const leftIsBowHand = leftZ >= rightZ;
+      this.bowHand = leftIsBowHand ? left : right;
+      this.stringHand = leftIsBowHand ? right : left;
+    } else {
+      this.bowHand = left ?? right;
+    }
+
+    if (this.drawAction) this.drawAction.time = 0;
+    this.mixer?.update(0);
   }
 
   private setupAnimation(
@@ -224,34 +266,11 @@ export class ArcherRig {
    * part-way through and whichever wrist ends up further down-range is the one
    * supporting the bow.
    */
-  private attachBow(character: THREE.Object3D, bow: THREE.Object3D): void {
+  private attachBow(_character: THREE.Object3D, bow: THREE.Object3D): void {
     this.bow = bow;
     this.prepareBow(bow);
     this.bowPivot.add(bow);
-
-    if (this.drawAction && this.mixer) {
-      this.drawAction.time = this.drawAction.getClip().duration * 0.75;
-      this.mixer.update(0);
-    }
-    character.updateWorldMatrix(true, true);
-
-    const left = this.findBone(character, 'mixamorig:LeftHand', 'LeftHand', 'Wrist.L');
-    const right = this.findBone(character, 'mixamorig:RightHand', 'RightHand', 'Wrist.R');
-
-    if (left && right) {
-      const leftZ = this.facingGroup.worldToLocal(left.getWorldPosition(this.scratch)).z;
-      const rightZ = this.facingGroup.worldToLocal(right.getWorldPosition(this.scratchB)).z;
-      const leftIsBowHand = leftZ >= rightZ;
-      this.bowHand = leftIsBowHand ? left : right;
-      this.stringHand = leftIsBowHand ? right : left;
-    } else {
-      this.bowHand = left ?? right;
-    }
-
     this.buildString();
-
-    if (this.drawAction) this.drawAction.time = 0;
-    this.mixer?.update(0);
   }
 
   /**
@@ -607,7 +626,17 @@ export class ArcherRig {
     this.arrowPivot.rotation.x = -this.pitch;
     this.arrowPivot.visible = this.arrow !== null && this.phase === 'ready' && !this.arrowGone;
 
-    // The string is rebuilt last, once the bow and the hands have moved.
+    // Her own bowstring: the nocking-point bone is moved onto the drawing
+    // hand, which is all a bowstring does. The vertices around it are weighted
+    // to the limbs, so they stay put and the string bends into a V.
+    if (this.stringBone && this.stringHand && this.stringBone.parent) {
+      this.stringHand.getWorldPosition(this.scratch);
+      this.stringBone.parent.worldToLocal(this.scratch);
+      this.stringBone.position.copy(this.scratch);
+    }
+
+    // The drawn-in-code string is rebuilt last, once the bow and the hands
+    // have moved. It exists only for a bow that has no string of its own.
     this.group.updateWorldMatrix(true, true);
     this.updateString();
 

@@ -136,6 +136,76 @@ function bytesOfDataUrl(url) {
   return { mime, bytes: new Uint8Array(Buffer.from(url.slice(comma + 1), 'base64')) };
 }
 
+/**
+ * Put every skinned mesh on ONE skeleton.
+ *
+ * FBXLoader gives each skinned mesh its own copy of the bone hierarchy, and an
+ * animation can only drive one of them: five of Erika Archer's six meshes —
+ * her bow and her arrow among them — sat frozen in their bind pose while the
+ * body moved, so she drew nothing and held nothing.
+ *
+ * The copies are identical bone-for-bone, so every mesh is rebound, by name,
+ * to the ONE hierarchy that is actually in the scene graph. That last part is
+ * the whole trick: an animation track names its target, and both three and the
+ * glTF exporter resolve that name against the scene. Rebinding the meshes onto
+ * some other identical-looking copy — the first mesh's own, say — leaves the
+ * meshes on bones the clip has no way to reach, which looks exactly like the
+ * bug it was meant to fix. Each mesh keeps its OWN bind inverses, which are
+ * what tie its vertices to the pose it was skinned in.
+ */
+function unifySkeleton(group) {
+  const meshes = [];
+  const inScene = new Map();
+  group.traverse((child) => {
+    if (child.isSkinnedMesh) meshes.push(child);
+    // First one wins, matching how a track name is resolved.
+    if (child.isBone && !inScene.has(child.name)) inScene.set(child.name, child);
+  });
+  if (meshes.length < 2 || inScene.size === 0) return;
+
+  let missing = 0;
+  for (const mesh of meshes) {
+    const bones = mesh.skeleton.bones.map((bone) => {
+      const shared = inScene.get(bone.name);
+      if (!shared) missing += 1;
+      return shared ?? bone;
+    });
+    mesh.bind(new THREE.Skeleton(bones, mesh.skeleton.boneInverses), mesh.bindMatrix);
+  }
+
+  console.log(
+    `  unified ${meshes.length} meshes onto the scene's ${inScene.size}-bone skeleton` +
+      (missing ? ` — ${missing} bone(s) had no match` : ''),
+  );
+}
+
+/**
+ * Fail loudly if the clip cannot reach the bones the meshes are bound to.
+ *
+ * This is the exact failure that shipped: the character animated, so nothing
+ * looked broken, while her bow and arrow hung motionless in bind pose.
+ */
+function assertClipDrivesMeshes(group, clip) {
+  const meshes = [];
+  group.traverse((child) => {
+    if (child.isSkinnedMesh) meshes.push(child);
+  });
+  if (!meshes.length) return;
+
+  const bound = new Set();
+  for (const mesh of meshes) for (const bone of mesh.skeleton.bones) bound.add(bone);
+
+  let driven = 0;
+  for (const track of clip.tracks) {
+    const node = THREE.PropertyBinding.findNode(group, track.name.split('.')[0]);
+    if (node && bound.has(node)) driven += 1;
+  }
+  if (driven === 0) {
+    throw new Error(`"${clip.name}" drives none of the bones the meshes use`);
+  }
+  console.log(`  ${driven}/${clip.tracks.length} clip tracks reach the skinned skeleton`);
+}
+
 mkdirSync(outDir, { recursive: true });
 
 const manager = new THREE.LoadingManager();
@@ -203,6 +273,11 @@ for (const source of SOURCES) {
   clip.name = source.clip;
 
   const maps = new Map();
+
+  if (source.keepMesh) {
+    unifySkeleton(group);
+    assertClipDrivesMeshes(group, clip);
+  }
 
   if (!source.keepMesh) {
     // Drop the character but keep the bones, so the clip still has something
