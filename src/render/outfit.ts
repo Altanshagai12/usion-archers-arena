@@ -18,9 +18,11 @@
  * archer is you while the rest of the outfit stays the same on both.
  *
  * A character that arrives with its OWN textures — a real clothed character
- * rather than a mannequin — is left alone. Painting flat colours over an
- * artist's texture would only make it worse, so it keeps its maps and takes a
- * light wash of the team colour instead.
+ * rather than a mannequin — keeps every one of them. Only what it WEARS is
+ * recoloured, and only by multiplying: every fold, seam and shadow the artist
+ * painted survives, because a multiply changes hue without touching relative
+ * brightness. Skin, eyes, hair and the bow keep their own colours, since
+ * recolouring a face to say which team someone is on looks like a bug.
  */
 
 import * as THREE from 'three';
@@ -55,12 +57,55 @@ export function outfitFor(tunic: number): Outfit {
 const BELT_DEPTH = 0.28;
 
 /**
- * How far a textured character is pulled toward its team colour.
- *
- * Enough to tell two of them apart at range, light enough to leave the
- * artwork recognisable.
+ * How far the worn texture's multiplier is pulled from white to the team
+ * colour. Toned down from the full colour because multiplying by a saturated
+ * one would crush an already dark outfit to nearly black.
  */
-const TEAM_WASH = 0.3;
+const TEAM_TINT = 0.6;
+
+/**
+ * A multiply can only darken, and this outfit starts dark, so a little
+ * emissive lifts it back to where the colour actually reads at range.
+ */
+const TEAM_GLOW = 0.2;
+
+/**
+ * Materials that keep their own colour whatever team they are on.
+ *
+ * Matched loosely on purpose: it is far worse to tint a face than to miss a
+ * garment, and anything unmatched is treated as something worn.
+ */
+const KEEPS_ITS_COLOUR = /body|skin|head|face|eye|lash|hair|teeth|tongue|bow|arrow|quiver/i;
+
+/**
+ * Recolour one worn material, detail and all.
+ *
+ * `color` multiplies the base texture, so the artwork's own shading comes
+ * through unchanged and only its hue moves.
+ */
+function wearTeamColour(material: THREE.MeshStandardMaterial, tunic: number): void {
+  const team = new THREE.Color(tunic);
+  material.color.setHex(0xffffff).lerp(team, TEAM_TINT);
+  if (!material.emissive) return;
+  material.emissive.copy(team);
+  material.emissiveIntensity = TEAM_GLOW;
+  // The hit flash overwrites emissive and has to know what to put back.
+  material.userData.baseEmissive = { hex: team.getHex(), intensity: TEAM_GLOW };
+}
+
+/** Is anything on this character recognisably worn rather than part of it? */
+function anyWearable(root: THREE.Object3D): boolean {
+  let found = false;
+  root.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (found || !mesh.isMesh) return;
+    const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    if (list.some((material) => material && !KEEPS_ITS_COLOUR.test(material.name ?? ''))) {
+      found = true;
+    }
+  });
+  return found;
+}
 
 /** Does this character come with its own artwork? */
 function isTextured(root: THREE.Object3D): boolean {
@@ -209,21 +254,24 @@ function paint(mesh: THREE.SkinnedMesh, outfit: Outfit): boolean {
  */
 export function dressCharacter(root: THREE.Object3D, outfit: Outfit): void {
   const textured = isTextured(root);
+  // If a character names nothing we recognise as worn, everything counts —
+  // better a fully tinted archer than two identical ones.
+  const wearable = anyWearable(root)
+    ? (name: string): boolean => !KEEPS_ITS_COLOUR.test(name)
+    : (): boolean => true;
 
   root.traverse((child) => {
     const mesh = child as THREE.SkinnedMesh;
     if (!mesh.isMesh) return;
 
     if (textured) {
-      // Keep the artwork; just make the two archers tellable apart. The
-      // material colour multiplies the map, so this has to stay a wash.
       const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      const washed = list.map((material) => {
+      const worn = list.map((material) => {
         const copy = (material as THREE.MeshStandardMaterial).clone();
-        copy.color.lerp(new THREE.Color(outfit.tunic), TEAM_WASH);
+        if (wearable(material?.name ?? '')) wearTeamColour(copy, outfit.tunic);
         return copy;
       });
-      mesh.material = Array.isArray(mesh.material) ? washed : washed[0];
+      mesh.material = Array.isArray(mesh.material) ? worn : worn[0];
       return;
     }
 

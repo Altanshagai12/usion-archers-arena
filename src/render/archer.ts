@@ -653,8 +653,14 @@ export class ArcherRig {
       for (const material of materials) {
         const standard = material as THREE.MeshStandardMaterial;
         if (!standard || !standard.emissive) continue;
-        standard.emissive.setHex(flashing ? 0xff3b30 : 0x000000);
-        standard.emissiveIntensity = flashing ? 0.6 : 0;
+        // Back to whatever the outfit set, not to black: the team colour is
+        // carried partly by emissive, and zeroing it stripped the archer of
+        // its colour the first time it was hit.
+        const base = standard.userData.baseEmissive as
+          | { hex: number; intensity: number }
+          | undefined;
+        standard.emissive.setHex(flashing ? 0xff3b30 : (base?.hex ?? 0x000000));
+        standard.emissiveIntensity = flashing ? 0.6 : (base?.intensity ?? 0);
       }
     });
   }

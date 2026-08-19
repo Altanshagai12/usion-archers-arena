@@ -215,6 +215,61 @@ describe('dressCharacter', () => {
     // A wash, not a repaint: still much closer to white than to the tunic.
     expect(you.getHex()).not.toBe(0x56b7f0);
   });
+  it('recolours what is worn and nothing else', () => {
+    // Recolouring a face, an eye or a bow to say which team someone is on
+    // reads as a bug. Only the clothing changes.
+    const character = new THREE.Group();
+    const named: Record<string, THREE.MeshStandardMaterial> = {};
+    for (const name of ['Akai_MAT1', 'Body_MAT1', 'EyeSpec_MAT1', 'Bow_MAT', 'Arrow_MAT']) {
+      const mesh = skinned([{ bone: SKELETON.indexOf('mixamorigSpine1'), y: 1.3 }]);
+      const material = mesh.material as THREE.MeshStandardMaterial;
+      material.name = name;
+      material.map = new THREE.Texture();
+      character.add(mesh);
+      named[name] = material;
+    }
+    dressCharacter(character, outfitFor(0x56b7f0));
+
+    const after = (name: string): THREE.MeshStandardMaterial =>
+      (character.children.find(
+        (child) => ((child as THREE.Mesh).material as THREE.MeshStandardMaterial).name === name,
+      ) as THREE.Mesh).material as THREE.MeshStandardMaterial;
+
+    // Worn: multiplied toward the team colour, and never all the way to it —
+    // the texture underneath has to survive.
+    expect(after('Akai_MAT1').color.getHex()).not.toBe(0xffffff);
+    expect(after('Akai_MAT1').color.getHex()).not.toBe(0x56b7f0);
+    expect(after('Akai_MAT1').emissive.getHex()).not.toBe(0x000000);
+    // Part of her, not worn by her.
+    for (const name of ['Body_MAT1', 'EyeSpec_MAT1', 'Bow_MAT', 'Arrow_MAT']) {
+      expect(after(name).color.getHex(), name).toBe(0xffffff);
+      // Default MeshStandardMaterial intensity is 1; black emissive is what
+      // actually means "emits nothing".
+      expect(after(name).emissive.getHex(), name).toBe(0x000000);
+    }
+    // Every material keeps its texture either way.
+    for (const name of Object.keys(named)) expect(after(name).map, name).toBeTruthy();
+  });
+
+  it('remembers the emissive the hit flash has to put back', () => {
+    // The flash overwrites emissive; zeroing it afterwards used to strip the
+    // team colour off an archer the first time it was hit.
+    const mesh = skinned([{ bone: SKELETON.indexOf('mixamorigSpine1'), y: 1.3 }]);
+    const material = mesh.material as THREE.MeshStandardMaterial;
+    material.name = 'Akai_MAT1';
+    material.map = new THREE.Texture();
+    dressCharacter(mesh, outfitFor(0xe0574f));
+
+    const dressedMaterial = mesh.material as THREE.MeshStandardMaterial;
+    // The invariant that matters: what the flash restores is exactly what
+    // dressing set.
+    expect(dressedMaterial.userData.baseEmissive).toEqual({
+      hex: new THREE.Color(0xe0574f).getHex(),
+      intensity: dressedMaterial.emissiveIntensity,
+    });
+    expect(dressedMaterial.emissiveIntensity).toBeGreaterThan(0);
+    expect(dressedMaterial.emissive.getHex()).toBe(new THREE.Color(0xe0574f).getHex());
+  });
   it('leaves an unpaintable mesh flat rather than black', () => {
     // vertexColors with no colour attribute renders the whole figure black,
     // so a mesh that cannot be painted must keep the flat team colour.
