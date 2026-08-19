@@ -98,6 +98,19 @@ describe('seating', () => {
     expect(heightTier(9)).toBe('high');
   });
 
+  it('draws the firing mounds in something other than the ground colour', () => {
+    // Standing high is the point of the duel, and it did not read at all
+    // while the mound was painted in a shade of the field around it.
+    const apart = (a: number, b: number): number =>
+      Math.abs((a >> 16) - (b >> 16)) +
+      Math.abs(((a >> 8) & 0xff) - ((b >> 8) & 0xff)) +
+      Math.abs((a & 0xff) - (b & 0xff));
+    for (const arena of ARENAS) {
+      const { ground, groundAccent, mound } = arena.palette;
+      expect(apart(mound, ground), arena.id).toBeGreaterThan(70);
+      expect(apart(mound, groundAccent), arena.id).toBeGreaterThan(70);
+    }
+  });
   it('puts the two archers at different heights in every arena', () => {
     // A level arena hides the mechanic the duel is built on, and arena 0 is
     // the only one a new player has unlocked.

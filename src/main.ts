@@ -62,6 +62,8 @@ const KNOCKDOWN_TIMEOUT = 6;
 const INIT_TIMEOUT_MS = 2500;
 /** How often a stalled start re-announces itself. See `advanceWaiting`. */
 const NUDGE_INTERVAL_MS = 2500;
+/** Beat held on the fallen archer before the result card comes up. */
+const DEFEAT_PAUSE_MS = 500;
 
 type Phase = 'boot' | 'menu' | 'waiting' | 'playing' | 'over';
 
@@ -264,7 +266,9 @@ class Game {
         onCancel: () => this.cancelAim(),
       });
 
-      await preload(['archer_mx', 'bow', 'arrow', 'quiver']);
+      // The archer character carries its own bow and quiver, so only the
+      // arrow is warmed here — the arena needs one for every shot in flight.
+      await preload(['archer_mx', 'arrow']);
       requestAnimationFrame(this.frame);
     } catch (error) {
       // Losing the renderer must not take the menu down with it.
@@ -549,15 +553,19 @@ class Game {
 
     const arena = arenaByIndex(this.state.arenaIndex);
     this.hud.setArena(arena.nameKey, arena.wind);
-    this.refreshHealth();
 
     const shot = this.state.lastShot;
     if (shot && shot.sequence > this.animatedSequence) {
       this.animatedSequence = shot.sequence;
+      // Deliberately NOT refreshing health here. The reducer resolves a shot
+      // the instant it is sent — it has to, or clients would disagree — but
+      // the bar dropping before the arrow lands gives the result away and
+      // makes the flight look decorative. playShot updates it on impact.
       this.playShot(shot.seat, shot.input, shot.zone, shot.damage, shot.blocked);
       return;
     }
 
+    this.refreshHealth();
     this.refreshTurn();
   }
 
@@ -760,7 +768,9 @@ class Game {
         // stayed hanging in mid-air the moment the knockdown put that body on
         // the ground, and the shaft is only useful as a range marker anyway.
         if (last && !zone) this.arenaView.stickArrow(last, before);
-        if (zone) this.rigs[seat === 0 ? 1 : 0]?.knockDown();
+        const victim: Seat = seat === 0 ? 1 : 0;
+        // The hit that ends the match puts them down for good.
+        if (zone) this.rigs[victim]?.knockDown(this.state.over);
         this.hud.showShotResult(zone, damage, blocked);
         this.refreshHealth();
 
@@ -768,11 +778,19 @@ class Game {
           recordBotOutcome(this.botMemory, result.path, archers[0], facingOf(1));
         }
 
+        if (this.state.over) {
+          // Nobody is getting up, so there is no knockdown to wait on. Let the
+          // fall land before the result card covers the screen.
+          const fall = zone ? (this.rigs[victim]?.fallSeconds ?? 1.4) * 1000 : 0;
+          window.setTimeout(() => this.refreshTurn(), fall + DEFEAT_PAUSE_MS);
+          return;
+        }
+
         // Wait for the knockdown to actually finish rather than guessing at a
         // duration. The fall, the beat on the ground and the rise all come from
         // clip lengths, so a fixed delay handed the turn back while the archer
         // was still flat — and both sides could shoot from the floor.
-        if (zone) this.turnAfterKnockdown = { seat: seat === 0 ? 1 : 0, waited: 0 };
+        if (zone) this.turnAfterKnockdown = { seat: victim, waited: 0 };
         else this.refreshTurn();
       },
       Math.max(MIN_SHOT_MS, flightMs),

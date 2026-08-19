@@ -74,6 +74,8 @@ export class ArcherRig {
 
   private phase: Phase = 'ready';
   private phaseTimer = 0;
+  /** Set by the hit that ended the match — this archer does not get back up. */
+  private defeated = false;
   /** 0 at rest, 1 fully drawn — what the draw clip is scrubbed to. */
   private scrub = 0;
   private aimBlend = 0;
@@ -115,11 +117,8 @@ export class ArcherRig {
   }
 
   async load(options: ArcherVisualOptions): Promise<void> {
-    const [character, bow, arrow, quiver, aimClips, deathClips] = await Promise.all([
+    const [character, aimClips, deathClips] = await Promise.all([
       instantiate(options.model),
-      instantiate('bow'),
-      instantiate('arrow'),
-      instantiate('quiver'),
       loadClips('anim_aim'),
       loadClips('anim_death'),
     ]);
@@ -127,11 +126,42 @@ export class ArcherRig {
     this.character = character;
     this.bodyPivot.add(character);
     dressCharacter(character, outfitFor(options.tint ?? 0x8a8f99));
-
     this.setupAnimation(character, options.model, aimClips, deathClips);
+
+    // A real archer character arrives holding its own bow, arrow and quiver,
+    // all skinned to the same skeleton — so the draw carries them by itself and
+    // nothing here has to place them, or to draw a string across a bow whose
+    // own is already modelled. Only a bare mannequin needs to be handed props.
+    if (this.hasOwnBow(character)) return;
+
+    const [bow, arrow, quiver] = await Promise.all([
+      instantiate('bow'),
+      instantiate('arrow'),
+      instantiate('quiver'),
+    ]);
     this.attachBow(character, bow);
     this.attachArrow(arrow);
     this.attachQuiver(character, quiver);
+  }
+
+  /**
+   * Does this character already carry a bow?
+   *
+   * Matched on the MATERIAL name rather than the mesh name: the exporter's
+   * node names did not line up with the geometry they held, while the
+   * materials ("Bow_MAT", "Arrow_MAT", "Body_MAT1") named their parts exactly.
+   */
+  private hasOwnBow(character: THREE.Object3D): boolean {
+    let found = false;
+    character.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (found || !mesh.isMesh) return;
+      const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      if (list.some((material) => /bow/i.test((material as THREE.Material)?.name ?? ''))) {
+        found = true;
+      }
+    });
+    return found;
   }
 
   private setupAnimation(
@@ -436,14 +466,26 @@ export class ArcherRig {
     this.arrowGone = false;
   }
 
-  /** Take a hit: go down with the death clip, then rise by reversing it. */
-  knockDown(): void {
+  /** How long the fall itself takes, in seconds. */
+  get fallSeconds(): number {
+    return this.deathAction?.getClip().duration ?? 1.4;
+  }
+
+  /**
+   * Take a hit: go down with the death clip, then rise by reversing it.
+   *
+   * `final` is the hit that ended the match. There is no getting up from it —
+   * an archer on zero health used to stand back up and only then be shown the
+   * result card, which read as surviving and then losing anyway.
+   */
+  knockDown(final = false): void {
     this.flashUntil = performance.now() + 340;
     this.drawAmount = 0;
     this.scrub = 0;
     this.loosing = false;
     // Whoever gets back up is holding an arrow again.
     this.arrowGone = false;
+    this.defeated = final;
     this.phase = 'down';
     this.phaseTimer = 0;
 
@@ -470,6 +512,8 @@ export class ArcherRig {
 
     if (this.phase === 'down') {
       this.phaseTimer += dt;
+      // Defeated: the death clip clamps on its last frame and stays there.
+      if (this.defeated) return;
       const length = (death?.getClip().duration ?? 1) + DOWN_SECONDS;
       if (this.phaseTimer < length) return;
       this.phase = 'rising';

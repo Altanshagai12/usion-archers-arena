@@ -29,6 +29,14 @@ export interface ArenaDefinition extends ArenaSpec {
   palette: {
     ground: number;
     groundAccent: number;
+    /**
+     * The firing mounds.
+     *
+     * Deliberately NOT a shade of the ground: the mounds used to be drawn in
+     * groundAccent, so the raised platform an archer stands on melted into the
+     * field around it and standing high looked like standing on the flat.
+     */
+    mound: number;
     ridge: number;
     sky: [number, number];
     fog: number;
@@ -124,6 +132,7 @@ export const ARENAS: ArenaDefinition[] = [
     palette: {
       ground: 0x6f8f4a,
       groundAccent: 0x5b7a3c,
+      mound: 0xb09a72,
       ridge: 0x6c7079,
       sky: [0x7fb6e8, 0xdcecf8],
       fog: 0xc9e0f2,
@@ -170,6 +179,7 @@ export const ARENAS: ArenaDefinition[] = [
     palette: {
       ground: 0x8d8562,
       groundAccent: 0x736c4f,
+      mound: 0x8f96a0,
       ridge: 0x8a8070,
       sky: [0xbfae8c, 0xf0e6d2],
       fog: 0xdccfb2,
@@ -213,6 +223,7 @@ export const ARENAS: ArenaDefinition[] = [
     palette: {
       ground: 0x6e7669,
       groundAccent: 0x585f54,
+      mound: 0xa88a5e,
       ridge: 0x6a6f78,
       sky: [0x6f97c0, 0xd3e3f0],
       fog: 0xb9cbdb,
@@ -255,6 +266,7 @@ export const ARENAS: ArenaDefinition[] = [
     palette: {
       ground: 0x8a7358,
       groundAccent: 0x6b5844,
+      mound: 0x9aa3ab,
       ridge: 0x7d6752,
       sky: [0xe08a52, 0xf7dcae],
       fog: 0xe4b98c,
@@ -296,6 +308,7 @@ export const ARENAS: ArenaDefinition[] = [
     palette: {
       ground: 0x434a52,
       groundAccent: 0x343a41,
+      mound: 0x7d8794,
       ridge: 0x3d4653,
       sky: [0x2f3d5c, 0x7f93b8],
       fog: 0x5f6f8c,

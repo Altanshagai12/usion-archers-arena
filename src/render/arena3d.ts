@@ -197,13 +197,28 @@ export class ArenaView {
     }
   }
 
+  /**
+   * The firing mounds.
+   *
+   * These carry the whole point of the duel — one archer shoots down at the
+   * other — so they are drawn to be read at a glance: their own colour rather
+   * than a shade of the ground they sit in, faceted sides that catch the light
+   * per face, and a lighter cap so the top of the platform reads as an edge
+   * you are standing on rather than as more field.
+   */
   private buildMounds(arena: ArenaDefinition): void {
-    const material = new THREE.MeshStandardMaterial({
-      color: arena.palette.groundAccent,
-      roughness: 0.97,
+    const side = new THREE.MeshStandardMaterial({
+      color: arena.palette.mound,
+      roughness: 0.95,
+      metalness: 0,
+      flatShading: true,
+    });
+    const cap = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(arena.palette.mound).lerp(new THREE.Color(0xffffff), 0.22),
+      roughness: 0.95,
       metalness: 0,
     });
-    this.disposables.push(material);
+    this.disposables.push(side, cap);
 
     for (const mound of arena.mounds) {
       if (mound.height <= 0.01) continue;
@@ -213,7 +228,9 @@ export class ArenaView {
         mound.height,
         20,
       );
-      const node = new THREE.Mesh(geometry, material);
+      // CylinderGeometry groups its side, top and bottom, so the cap can be
+      // its own material without a second draw call's worth of geometry.
+      const node = new THREE.Mesh(geometry, [side, cap, side]);
       node.position.set(mound.at.x, mound.height / 2, mound.at.z);
       node.castShadow = true;
       node.receiveShadow = true;

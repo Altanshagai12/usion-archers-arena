@@ -7,22 +7,28 @@
  * clip so those clips can be played on it — three binds clips by node name and
  * the names match exactly.
  *
- * Mixamo's own mannequins (Beta, X Bot, Y Bot) carry flat materials and NO
- * textures, so the character arrives bare and the game dresses it per seat by
- * painting its vertices (src/render/outfit.ts). A real clothed character from
- * the Characters tab does embed its maps, and those are kept — swapping one in
- * needs no code change, and the game skips its own painting when it sees them.
- * That trade is deliberate: real
- * archery motion matters more here than a painted figure, and nothing else
- * available ships a draw.
+ * Mixamo's mannequins (Beta, X Bot, Y Bot) carry flat materials and no
+ * textures; a real character from the Characters tab embeds its maps. Both are
+ * handled: embedded textures are extracted and attached to the glTF, and a
+ * character that has none gets a plain surface for the game to dress by
+ * painting its vertices (src/render/outfit.ts).
+ *
+ * Getting the textures out in Node needs some care. three's FBXLoader hands
+ * embedded images to a browser — `window.URL.createObjectURL` for the bytes,
+ * then a TextureLoader that wants an <img> — and GLTFExporter then wants a
+ * canvas to re-encode them. None of that exists here, and none of it is
+ * needed: the bytes are already in the file. So the loader is given somewhere
+ * DOM-free to put them, the mesh is exported with no maps at all, and the
+ * images are attached afterwards with gltf-transform, which speaks bytes.
  *
  *   npm run assets:mixamo        (source FBX files are not committed)
  */
 
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { NodeIO } from '@gltf-transform/core';
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
@@ -40,21 +46,103 @@ if (typeof globalThis.FileReader === 'undefined') {
   };
 }
 
+// FBXLoader wraps each embedded image in a Blob and asks the browser for an
+// object URL. Node's own Blob only gives its bytes back asynchronously, which
+// is no use inside a synchronous parse — so both are stood in with a pair that
+// hands back a data: URL carrying the bytes.
+class InlineBlob {
+  constructor(parts, options = {}) {
+    this.parts = parts;
+    this.type = options.type ?? 'application/octet-stream';
+  }
+
+  /** GLTFExporter builds a real Blob for its own output and then reads it. */
+  bytes() {
+    return Buffer.concat(
+      this.parts.map((part) => Buffer.from(part.buffer ?? part, part.byteOffset ?? 0, part.byteLength ?? undefined)),
+    );
+  }
+
+  arrayBuffer() {
+    const buffer = this.bytes();
+    return Promise.resolve(
+      buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+    );
+  }
+}
+
+globalThis.Blob = InlineBlob;
+globalThis.window = {
+  URL: {
+    createObjectURL(blob) {
+      return `data:${blob.type};base64,${blob.bytes().toString('base64')}`;
+    },
+  },
+};
+
+/**
+ * A texture loader that touches no DOM: it keeps the image URL on the texture
+ * and leaves decoding to whoever needs pixels. Nothing here does — the bytes
+ * go straight into the glTF.
+ */
+class HeadlessTextureLoader {
+  constructor() {
+    this.path = '';
+  }
+
+  setPath(path) {
+    this.path = path ?? '';
+    return this;
+  }
+
+  load(url) {
+    const texture = new THREE.Texture();
+    texture.userData.source = url;
+    return texture;
+  }
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(resolve(here, '..'), 'assets_raw');
 const SOURCE_DIR = process.env.MIXAMO_DIR ?? 'C:/Users/altan/Downloads';
 
 /** The first entry supplies the character; the rest are clip-only. */
 const SOURCES = [
-  { file: 'Standing Draw Arrow.fbx', clip: 'Draw', keepMesh: true, out: 'archer_mx.glb' },
-  { file: 'Standing Aim Overdraw.fbx', clip: 'Aim', keepMesh: false, out: 'anim_aim.glb' },
-  { file: 'Standing Death Right 02.fbx', clip: 'Death', keepMesh: false, out: 'anim_death.glb' },
+  { file: 'Standing Draw Arrow', clip: 'Draw', keepMesh: true, out: 'archer_mx.glb' },
+  { file: 'Standing Aim Overdraw', clip: 'Aim', keepMesh: false, out: 'anim_aim.glb' },
+  { file: 'Standing Death Right 02', clip: 'Death', keepMesh: false, out: 'anim_death.glb' },
 ];
+
+/**
+ * The newest download whose name starts with this one.
+ *
+ * A browser names a second download of the same animation "… (1).fbx", so
+ * matching the exact name would silently keep converting the previous
+ * character after a re-download.
+ */
+function newestSource(base) {
+  const candidates = readdirSync(SOURCE_DIR)
+    .filter((name) => name.startsWith(base) && name.toLowerCase().endsWith('.fbx'))
+    .map((name) => ({ name, at: statSync(join(SOURCE_DIR, name)).mtimeMs }))
+    .sort((a, b) => b.at - a.at);
+  if (!candidates.length) throw new Error(`no "${base}*.fbx" in ${SOURCE_DIR}`);
+  return candidates[0].name;
+}
+
+function bytesOfDataUrl(url) {
+  const comma = url.indexOf(',');
+  const header = url.slice(5, comma);
+  const [mime] = header.split(';');
+  return { mime, bytes: new Uint8Array(Buffer.from(url.slice(comma + 1), 'base64')) };
+}
 
 mkdirSync(outDir, { recursive: true });
 
-const loader = new FBXLoader();
+const manager = new THREE.LoadingManager();
+manager.addHandler(/\.(png|jpe?g|webp|tga|bmp)$/i, new HeadlessTextureLoader());
+const loader = new FBXLoader(manager);
 const exporter = new GLTFExporter();
+const io = new NodeIO();
 
 function exportGlb(scene, animations) {
   return new Promise((resolve, reject) => {
@@ -67,9 +155,43 @@ function exportGlb(scene, animations) {
   });
 }
 
+/** Put the images back, keyed by the material name they came off. */
+async function attachTextures(glb, maps) {
+  if (maps.size === 0) return glb;
+
+  const doc = await io.readBinary(glb);
+  let attached = 0;
+  for (const material of doc.getRoot().listMaterials()) {
+    const found = maps.get(material.getName());
+    if (!found) continue;
+
+    const base = doc
+      .createTexture(`${material.getName()}_base`)
+      .setImage(found.base.bytes)
+      .setMimeType(found.base.mime);
+    material.setBaseColorTexture(base);
+    // The factor multiplies the texture, so anything but white tints the art.
+    material.setBaseColorFactor([1, 1, 1, 1]);
+
+    if (found.normal) {
+      const normal = doc
+        .createTexture(`${material.getName()}_normal`)
+        .setImage(found.normal.bytes)
+        .setMimeType(found.normal.mime);
+      material.setNormalTexture(normal);
+    }
+    attached += 1;
+  }
+
+  if (attached !== maps.size) {
+    console.warn(`  ⚠ ${maps.size} texture set(s) found but ${attached} attached — names differ`);
+  }
+  return Buffer.from(await io.writeBinary(doc));
+}
+
 for (const source of SOURCES) {
-  const path = join(SOURCE_DIR, source.file);
-  const buffer = readFileSync(path);
+  const file = newestSource(source.file);
+  const buffer = readFileSync(join(SOURCE_DIR, file));
   const group = loader.parse(
     buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
     '',
@@ -77,8 +199,10 @@ for (const source of SOURCES) {
 
   // Mixamo names every take "mixamo.com"; give the clip a name to ask for.
   const clip = group.animations[0];
-  if (!clip) throw new Error(`no animation in ${source.file}`);
+  if (!clip) throw new Error(`no animation in ${file}`);
   clip.name = source.clip;
+
+  const maps = new Map();
 
   if (!source.keepMesh) {
     // Drop the character but keep the bones, so the clip still has something
@@ -89,28 +213,29 @@ for (const source of SOURCES) {
     });
     for (const mesh of doomed) mesh.removeFromParent();
   } else {
-    // FBXLoader builds Phong materials, which is not what a glTF wants. Carry
-    // over anything the character actually shipped with and substitute a plain
-    // surface only where there was nothing to keep.
-    let kept = 0;
+    // FBXLoader builds Phong materials, which is not what a glTF wants. The
+    // maps are set aside rather than carried, because exporting them needs a
+    // canvas; they go back in afterwards.
+    const parts = [];
     group.traverse((child) => {
       if (!child.isMesh) return;
+      parts.push(`${child.name}(${child.geometry.getAttribute('position').count})`);
       const originals = Array.isArray(child.material) ? child.material : [child.material];
-      const converted = originals.map((original) => {
-        const map = original?.map ?? null;
-        if (!map) {
-          return new THREE.MeshStandardMaterial({
-            color: 0xb9bec7,
-            roughness: 0.82,
-            metalness: 0.02,
+      const converted = originals.map((original, index) => {
+        const name = original?.name || `material_${index}`;
+        const source = original?.map?.userData?.source;
+        if (source) {
+          maps.set(name, {
+            base: bytesOfDataUrl(source),
+            normal: original.normalMap?.userData?.source
+              ? bytesOfDataUrl(original.normalMap.userData.source)
+              : null,
           });
         }
-        kept += 1;
         return new THREE.MeshStandardMaterial({
-          name: original.name,
-          map,
-          normalMap: original.normalMap ?? null,
-          color: original.color ? original.color.clone() : new THREE.Color(0xffffff),
+          name,
+          // White under a texture, plain grey when there is none to wear.
+          color: source ? new THREE.Color(0xffffff) : new THREE.Color(0xb9bec7),
           roughness: 0.82,
           metalness: 0.02,
         });
@@ -119,17 +244,19 @@ for (const source of SOURCES) {
       child.castShadow = true;
       child.receiveShadow = true;
     });
+
+    console.log(`  meshes: ${parts.join(' ')}`);
     console.log(
-      kept > 0
-        ? `  kept ${kept} textured material(s) — the game will not paint over them`
+      maps.size > 0
+        ? `  ${maps.size} textured material(s) — the game will not paint over them`
         : '  no textures in this export (a Mixamo mannequin) — the game paints an outfit on',
     );
   }
 
-  const glb = await exportGlb(group, [clip]);
+  const glb = await attachTextures(await exportGlb(group, [clip]), maps);
   const target = join(outDir, source.out);
   writeFileSync(target, glb);
   console.log(
-    `${source.file.padEnd(30)} -> ${source.out.padEnd(16)} ${Math.round(statSync(target).size / 1024)} KB`,
+    `${file.padEnd(34)} -> ${source.out.padEnd(16)} ${Math.round(statSync(target).size / 1024)} KB`,
   );
 }
